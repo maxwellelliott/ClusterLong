@@ -1,0 +1,2418 @@
+---
+title: "ClusterLong_paperFigures_240722"
+output: html_document
+date: "2024-07-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+require(conflicted)
+library(RColorBrewer)
+library(boot)
+library(corrplot)
+library(psych)
+library(svglite)
+library(magick)
+library(png)
+library(ggpubr)
+library(lme4)
+library(merTools)
+library(ggdist)
+library(cowplot)
+library(ggpubr)
+library(rstanarm)
+library(ggthemes)
+library(broom.mixed)
+library(bayesplot)
+library(broom)
+library(sjstats)
+library(parameters)
+#library(ggcorrplot)
+library(extrafont)
+library(tidyverse)
+library(grid)
+library(scales)
+library(cowplot)
+library(labeling)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+### Primary Goal - Make plots that may make it into the paper, save them and move on
+### Secondary goal - document some analyses and decisions that led to the main plots
+
+#####Pulled this out of clusterIndDashboards to clean up and stay focused.... 
+
+altPath="/path/to/data/"
+
+##Source the functions that you use below
+source(paste0(altPath,"Manuscripts/ClusterLong/Scripts/ClusterLong_Functions_240712.R"))
+
+###You are overloading memory so put variables here that you want to plot
+paperRegions<-read_csv("/path/to/data/Manuscripts/ClusterLong/Data/paperRegions.csv")
+
+paperRegions2<-c("Left-ADsignature_CT","Right-ADsignature_CT","Left-totalLateralVentricle","Right-totalLateralVentricle","Left-totalLateralVentricle_cm","Right-totalLateralVentricle_cm", "Left-totalBrainVolume","Right-totalBrainVolume", "WMH", "WMH_cm", "Left-Hippocampus","Right-Hippocampus","Left-Hippocampus_cm","Right-Hippocampus_cm", "allVentricles", "totalHippocampus", "BrainSegVolNotVentSurf", "BrainSegVolNotVentSurf_cm", "Left-MeanThickness", "Right-MeanThickness")
+
+plotRegions<-c("Left-ADsignature_CT","Right-ADsignature_CT","Left-FTDsignature_CT","Right-FTDsignature_CT", "Left-totalLateralVentricle","Right-totalLateralVentricle", "Left-totalBrainVolume","Right-totalBrainVolume", "WMH", "Left-Hippocampus","Right-Hippocampus", "BrainSegVolNotVentSurf", "Right-MeanGWCon", "Left-MeanThickness", "Right-MeanThickness", "Left-Amygdala", "Right-Amygdala", "Left-parahippocampal", "Right-parahippocampal", "lhCerebralWhiteMatterVol", "Left-temporalpole", "rhCerebralWhiteMatterVol","Right-temporalpole","Right-entorhinal","Left-entorhinal", "Left-Cerebellum-Cortex", "Right-Cerebellum-Cortex", "Left-lateralorbitofrontal", "Right-lateralorbitofrontal","Left-rostralanteriorcingulate", "Right-rostralanteriorcingulate", "Left-fusiform", "Right-fusiform", "Left-medialorbitofrontal", "Right-medialorbitofrontal")
+
+###Data Wrangled in /path/to/data/Scripts/ClusterLong_wrangleData_240803.R
+allFSdataLong<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ClusterLong_240803_allFSdataLong.rds")) %>% filter(region %in% c(plotRegions,paperRegions2))
+allFSdataCross<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ClusterCrossSectional_240803_allFSdataLong.rds")) %>% filter(region %in% plotRegions)
+
+### UKB means personalized for each dashboard sub
+UKBmeans.all<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ukbFSchangeMeans.dashboardIDs.rds"))
+UKBmeans.all <- UKBmeans.all %>% mutate(region = gsub("lh_","Left-",region)) %>% mutate(region = gsub("rh_","Right-",region)) %>% 
+  mutate(region = gsub("_thickness","",region)) %>% mutate(region = gsub("WM-hypointensities","WMH",region)) %>% 
+  mutate(region = gsub("-","",region)) %>% 
+  mutate(region = gsub("Left","Left-",region)) %>% mutate(region = gsub("Right","Right-",region)) %>% 
+  mutate(region = gsub("Thalamus","Thalamus-",region))
+
+
+#Fix Cerebellum naming
+allFSdataLong <- allFSdataLong %>%
+  mutate(region = ifelse(region == "Left-Cerebellum-Cortex", "Left-CerebellumCortex", region)) %>% mutate(region = ifelse(region == "Right-Cerebellum-Cortex", "Right-CerebellumCortex", region))
+
+allFSdataCross <- allFSdataCross %>%
+  mutate(region = ifelse(region == "Left-Cerebellum-Cortex", "Left-CerebellumCortex", region)) %>% mutate(region = ifelse(region == "Right-Cerebellum-Cortex", "Right-CerebellumCortex", region))
+
+  
+demo<-allFSdataLong %>% select(ID,dx,Age,Sex) %>% unique()
+#CDR<- read_csv(paste0(altPath,"Manuscripts/ClusterLong/Data/CDRdata_081624.csv"))
+
+####Only use the test retest sessions with data that you've cleared as good - 
+goodTestRetestSeshs<-as_vector(read_csv(paste0(altPath,"Manuscripts/ClusterLong/Data/allTestRetestSessionIDs_headPosErrorRemoved_240708"),col_names = F))
+
+plotData<-allFSdataLong
+####Get IDs of people with at least 6 ADNI scans and check if they have all other templates complete
+plotData.6ADNI<-plotData %>% filter(template == "ADNI_inclusive", maxSesh >5)
+plotData.6inclusive<-plotData %>% filter(template %in% c("CSx6_inclusive", "ADNI_inclusive")) %>% filter(maxSesh >5)
+allADNI.IDs<-unique(plotData.6ADNI$ID)
+
+###Probably use this for most plots.... Need to update after latest cluster long finishes
+plotData.allTemplates <- plotData
+plotData.allSesh <- plotData 
+
+numSesh<-plotData %>% group_by(ID) %>% summarize(numSesh = max(session))
+SixSeshIDs<-numSesh %>% filter(numSesh > 5) %>% select(ID) %>% as_vector()
+plotData.6sesh <- plotData %>% filter(ID %in% SixSeshIDs)
+
+##Dataset with only participants that have all test-retest data
+numTemplates <- plotData.allTemplates %>% group_by(ID,template) %>% summarise(count=n())
+allTestRetest.IDs <- as_vector(read_csv(paste0(altPath,"Manuscripts/ClusterLong/Data/allTestRetestID.csv")))
+
+###Get good subs, remove MCInos - after talking with Randy, these participants add unneccesary complexity without adding information
+plotData.allTestRetest.long <- plotData.6sesh %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos")
+plotData.allTestRetest.cross <- allFSdataCross %>% filter(ID %in% SixSeshIDs) %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos")
+
+plotData.allTestRetest.long.only1to6sesh <- plotData.allTestRetest.long %>% filter(session %in% c(1:6))
+
+IDs.plotData<-unique(plotData.allTestRetest.long.only1to6sesh$ID)
+Demo.plotData<-demo %>% filter(ID %in% IDs.plotData)
+
+plotData.allTestRetest.long.only1to6sesh
+
+
+regScans = c("0.8_CSx6_a","1.2_CSx6_a","1.0_CSx6_a","1.0_CSx6_b","1.0_CSx6_c","1.0_CSx6_d","0.9_CSx6_a","1.1_CSx6_a","1.0_ADNI_a", "0.8_CSx6_b","1.2_CSx6_b","1.0_CSx6_e","1.0_CSx6_f","1.0_CSx6_g","1.0_CSx6_h","0.9_CSx6_b","1.1_CSx6_b")
+CS1mmScans <- regScans[c(3:6,12:15)]
+
+### Summary stats for paper
+sumStatsData<-plotData.allTestRetest.long.only1to6sesh %>% filter(scanID == "1.0_ADNI_a", region == "WMH", template == "ADNI_inclusive")
+sumStatsData.baseline <- sumStatsData %>% filter(session == 2)
+summary(sumStatsData.baseline$yearsFromBaseline)*365
+sumStatsData.lastSesh <- sumStatsData %>% filter(session == 6)
+summary(sumStatsData.lastSesh$yearsFromBaseline)
+
+
+```
+
+```{r Part 1: Test Retest Figures}
+#### Test-retest intercept and slope figures for Regions of Interest
+
+dxColors<-c("#001219", "#005f73", "#0a9396", "#94d2bd", "#e9d8a6", "#ee9b00", "#ca6702", "#bb3e03", "#ae2012", "#9b2226")
+
+dxColors<-c("YA" = "#94d2bd","CU" = "#005f73", "AD" = "#9b2226","FTLD" = "#ee9b00")
+
+plotData.allTestRetest.long<-plotData.allTestRetest.long %>% mutate(dx = factor(dx, levels = c("YA","CU","AD", "FTLD"))) %>% drop_na
+plotData.allTestRetest.cross<-plotData.allTestRetest.cross %>% mutate(dx = factor(dx, levels = c("YA","CU","AD","FTLD"))) %>% drop_na
+
+brainVar="ADsignature_CT"### Cut of the Left- or Right- so that you plot them togheter
+plotTemplate="CSx6_8" ### This should be whatever comes before _test or _retest e.g. CSx6_8 or ADNI_1
+
+bilateralBrainVars<-unique(plotData.allTestRetest.long$region) %>% str_subset("Left|Right") %>% str_split("-") %>% map_chr(~ .x[2]) %>% unique()
+bilateralBrainVars<- bilateralBrainVars %>% str_subset("MeanGWCon", negate = TRUE)
+
+unilateralBrainVars<-unique(plotData.allTestRetest.long$region) %>% str_subset("Left|Right",negate = T) 
+
+##Grab table for plot labels 
+labelTable<-read_csv(paste0(altPath,"/Manuscripts/ClusterLong/Data/brainVarPlotNamingLookupTable.csv"))
+
+## I took the template part out of the for loop so that I could easily have different axis labels
+
+######################################
+## test-retest Plots
+######################################
+
+plotTemplates<-c("ADNI_1_test","CSx6_8_test","ADNI_1_retest","CSx6_8_retest")
+for(brainVar in bilateralBrainVars[c(4,5)]){
+#  for(plotTemplate in c("ADNI_1","CSx6_8")){
+    
+    #Grab Labels
+    labels<-as_vector(labelTable %>% filter(bvar == brainVar))
+    axisLabel<-labels[2]
+    unit<-labels[3]
+    longLabel<-labels[4]
+    
+    ##ADNI_1
+    plotTemplate <- "ADNI_1"
+    scan<-"1.0_ADNI_a"
+    #####
+    ## baseline Cross-Sectional Test-retest
+    #####
+  
+    plotDataLong <- plotData.allTestRetest.cross %>% filter(scanID == scan & str_detect(region, paste0("-",brainVar)) & session < 3) 
+    ### Average scans if there are multiple to display the effect of averaging cluster
+    plotDataLong <- plotDataLong %>% group_by(ID,dx, SessionWithinVisit,region) %>% summarise(value = mean(value)/1000) %>%
+      ungroup() %>% mutate(SessionWithinVisit = str_to_title(SessionWithinVisit))
+    plotDataLong <- plotDataLong %>% separate(c("Hemi", "region"),col = "region",sep = "-")  %>% distinct()  
+    plotDataWide <- plotDataLong %>% pivot_wider(names_from = SessionWithinVisit,values_from = value)
+    #Add shapes for left and right
+    # Define Unicode characters for half circles
+    left_half_circle <- "\u25D6"
+    right_half_circle <- "\u25D7"
+    
+    # Create a column for the Unicode symbols based on the Hemi column
+    plotDataWide <- plotDataWide %>%
+    mutate(shape = ifelse(Hemi == "Left", left_half_circle, right_half_circle))
+  
+    plotDataWide_L <- plotDataWide %>% filter(Hemi == "Left")
+    plotDataWide_R <- plotDataWide %>% filter(Hemi == "Right")
+    r_L<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_L))$r.squared))
+    r_R<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_R))$r.squared))
+    
+    ###Plot variables
+    ##Set the same axis for ADNI and CS
+    axisData<- plotData.allTestRetest.cross %>% filter(scanID %in% c(CS1mmScans,"1.0_ADNI_a") & str_detect(region, paste0("-",brainVar)) & session < 3)
+    axisData <- axisData %>% mutate(scanType = sapply(str_split(scanID, "_"), `[`, 2)) ##Grab ADNI and CSx6 for combining
+    axisData <- axisData %>% group_by(ID,dx, SessionWithinVisit,region,scanType) %>% summarise(value = mean(value)/1000) %>% ungroup()
+    axisMin.cross<-min(axisData$value) - max(axisData$value) *.05
+    axisMax.cross<-max(axisData$value) + max(axisData$value) *.05
+    ylab <- paste0("Retest Session ",axisLabel) #y = bquote(.(axisLabel) ~ "Error (mm"^3*")")
+    xlab <- paste0("Test Session ",axisLabel)
+    
+    p1 <- ggplot(data = plotDataWide,aes(x = Test, y = Retest, label = shape,color = dx)) +
+    geom_segment(x= axisMin.cross, y= axisMin.cross, xend= axisMax.cross, yend= axisMax.cross, linetype="dashed", size=1, color="black") + 
+    geom_text(size = 12, family = "Arial Unicode MS",show.legend = c(colour = FALSE, shape = TRUE),alpha = 0.8) +
+    scale_shape_manual(name=" ", values=c(15,17),labels = c(as.expression(bquote(Left~ (R == .(r_L)))),as.expression(bquote(Right~ (R == .(r_R))))))+
+    geom_point(aes(x= Test, y= Retest, shape= Hemi, colour=dx),  size=4,alpha=0,show.legend = c(colour = FALSE, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    scale_y_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    coord_equal(expand=F, xlim=c(axisMin.cross, axisMax.cross),ylim=c(axisMin.cross, axisMax.cross)) +  
+    labs(x=xlab, y=ylab) + 
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+  #  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/plot.Intercept.",plotTemplate,".",brainVar,".240722.png"),
+  #         plot = p1,dpi = 500,width = 6,height = 6.5,units = "in",bg = "white",device = "png")
+        
+  #####
+  ## 6 session Slope Test-retest
+  #####
+    
+    ## Get all the slopes for each person    
+    lm.plotData.1 <-organize_LM_simple(paste0("Left-",brainVar),paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+          mutate(Hemi="Left",region=brainVar, session = "Test")
+    lm.plotData.2 <-organize_LM_simple(paste0("Left-",brainVar),paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>% 
+      mutate(Hemi="Left",region=brainVar, session = "Retest")
+    lm.plotData.3 <-organize_LM_simple(paste0("Right-",brainVar),paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+      mutate(Hemi="Right",region=brainVar, session = "Test")
+    lm.plotData.4 <-organize_LM_simple(paste0("Right-",brainVar),paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>%
+      mutate(Hemi="Right",region=brainVar, session = "Retest")
+    
+    plotDataLong <- bind_rows(lm.plotData.1,lm.plotData.2,lm.plotData.3,lm.plotData.4) %>% mutate(slope = slope/1000)
+    plotDataWide <- plotDataLong %>% select(ID,dx,Hemi,region,session,slope) %>% pivot_wider(names_from = c(session),values_from = slope)
+  
+    session1data<-sym("Test")
+    session2data<-sym(paste0(brainVar,"_Session2"))
+    plotDataWide_L <- plotDataWide %>% filter(Hemi == "Left")
+    plotDataWide_R <- plotDataWide %>% filter(Hemi == "Right")
+    r_L<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_L))$r.squared))
+    r_R<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_R))$r.squared))
+    
+    ###Plot variables
+    ###Get all the slopes for ADNI and CS to keep axes the same
+    all.lm.plotData<-tibble()
+    for(hemi in c("Left","Right")){
+      for(template in plotTemplates){
+          lm.plotData <-organize_LM_simple(paste0(hemi,"-",brainVar),templateName = template,df = plotData.allTestRetest.long,sessions = c(1,2,3,4,5,6))
+          all.lm.plotData<-bind_rows(all.lm.plotData,lm.plotData)
+      }
+    }
+    
+    
+    axisMin<-(min(all.lm.plotData$slope) - max(all.lm.plotData$slope) *.08) /1000
+    axisMax<-(max(all.lm.plotData$slope) + max(all.lm.plotData$slope) *.08) /1000
+    ylab <- paste0("Retest Session ",longLabel)
+    xlab <- paste0("Test Session ",longLabel)
+    
+    # Create a column for the Unicode symbols based on the Hemi column
+    plotDataWide <- plotDataWide %>% mutate(shape = ifelse(Hemi == "Left", left_half_circle, right_half_circle))
+    
+    p2<-ggplot(data = plotDataWide,aes(x = Test, y = Retest, label = shape,color = dx)) +
+    geom_segment(x= axisMin, y= axisMin, xend= axisMax, yend= axisMax, linetype="dashed", size=1, color="black") +
+    geom_text(size = 12, family = "Arial Unicode MS",show.legend = c(colour = FALSE, shape = TRUE),alpha = 0.8) +
+    scale_shape_manual(name=" ", values=c(15,17),labels = c(as.expression(bquote(Left~ (R == .(r_L)))),as.expression(bquote(Right~ (R == .(r_R))))))+
+    geom_point(aes(x= Test, y= Retest, shape= Hemi, colour=dx),  size=4,alpha=0,show.legend = c(colour = FALSE, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits = c(axisMin, axisMax), breaks = pretty_breaks(n = 5)) +  # Set 5 breaks for x-axis
+    scale_y_continuous(limits = c(axisMin, axisMax), breaks = pretty_breaks(n = 5)) +  # Set 5 breaks for y-axis
+    coord_equal(expand=F, xlim=c(axisMin, axisMax),ylim=c(axisMin, axisMax)) +  
+    labs(x=xlab, y=ylab) + guides(colour = "none") +
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+  #    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/plot.Slope.",plotTemplate,".",brainVar,".240722.png"),
+  #           plot = p2,dpi = 500,width = 6,height = 6.5,units = "in",bg = "white",device = "png")
+    
+    
+    ###################################
+    
+    ##CSx6_1
+    plotTemplate <- "CSx6_8"
+    
+    #####
+    ## baseline Cross-Sectional Test-retest
+    #####
+  
+    plotDataLong <- plotData.allTestRetest.cross %>% filter(str_detect(template,paste0(plotTemplate,"_")) & str_detect(region, paste0("-",brainVar)) & session < 3)
+    ### Average scans if there are multiple to display the effect of averaging cluster
+    plotDataLong <- plotDataLong %>% group_by(ID,dx, SessionWithinVisit,region) %>% summarise(value = mean(value)/1000) %>%
+      ungroup() %>% mutate(SessionWithinVisit = str_to_title(SessionWithinVisit))
+    plotDataLong <- plotDataLong %>% separate(c("Hemi", "region"),col = "region",sep = "-")  %>% distinct()  
+    plotDataWide <- plotDataLong %>% pivot_wider(names_from = SessionWithinVisit,values_from = value)
+  
+    plotDataWide_L <- plotDataWide %>% filter(Hemi == "Left")
+    plotDataWide_R <- plotDataWide %>% filter(Hemi == "Right")
+    r_L<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_L))$r.squared))
+    r_R<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_R))$r.squared))
+    
+    ###Plot variables
+    
+    ##Set the same axis for ADNI and CS
+
+    ylab <- paste0("Retest Session ",axisLabel)
+    xlab <- paste0("Test Session ",axisLabel)
+    
+    
+    # Create a column for the Unicode symbols based on the Hemi column
+    plotDataWide <- plotDataWide %>% mutate(shape = ifelse(Hemi == "Left", left_half_circle, right_half_circle))
+    
+    p3<-ggplot(data = plotDataWide,aes(x = Test, y = Retest, label = shape,color = dx)) +
+    geom_segment(x= axisMin.cross, y= axisMin.cross, xend= axisMax.cross, yend= axisMax.cross, linetype="dashed", size=1, color="black") +
+    geom_text(size = 12, family = "Arial Unicode MS",show.legend = c(colour = FALSE, shape = TRUE),alpha = 0.8) +
+    scale_shape_manual(name=" ", values=c(15,17),labels = c(as.expression(bquote(Left~ (R == .(r_L)))),as.expression(bquote(Right~ (R == .(r_R))))))+
+    geom_point(aes(x= Test, y= Retest, shape= Hemi, colour=dx),  size=4,alpha=0,show.legend = c(colour = FALSE, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    scale_y_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    coord_equal(expand=F, xlim=c(axisMin.cross, axisMax.cross),ylim=c(axisMin.cross, axisMax.cross)) +  
+    labs(x=xlab, y=ylab) + 
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+  #  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/plot.Intercept.",plotTemplate,".",brainVar,".240722.png"),
+  #         plot = p1,dpi = 500,width = 6,height = 6.5,units = "in",bg = "white",device = "png")
+        
+  #####
+  ## 6 session Slope Test-retest
+  #####
+    
+    ## Get all the slopes for each person    
+    lm.plotData.1 <-organize_LM_simple(paste0("Left-",brainVar),paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+          mutate(Hemi="Left",region=brainVar, session = "Test")
+    lm.plotData.2 <-organize_LM_simple(paste0("Left-",brainVar),paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>% 
+      mutate(Hemi="Left",region=brainVar, session = "Retest")
+    lm.plotData.3 <-organize_LM_simple(paste0("Right-",brainVar),paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+      mutate(Hemi="Right",region=brainVar, session = "Test")
+    lm.plotData.4 <-organize_LM_simple(paste0("Right-",brainVar),paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>%
+      mutate(Hemi="Right",region=brainVar, session = "Retest")
+    
+    plotDataLong <- bind_rows(lm.plotData.1,lm.plotData.2,lm.plotData.3,lm.plotData.4) %>% mutate(slope = slope/1000)
+    plotDataWide <- plotDataLong %>% select(ID,dx,Hemi,region,session,slope) %>% pivot_wider(names_from = c(session),values_from = slope)
+  
+    session1data<-sym("Test")
+    session2data<-sym(paste0(brainVar,"_Session2"))
+    plotDataWide_L <- plotDataWide %>% filter(Hemi == "Left")
+    plotDataWide_R <- plotDataWide %>% filter(Hemi == "Right")
+    r_L<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_L))$r.squared))
+    r_R<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide_R))$r.squared))
+    
+    ###Plot variables
+    ###Get all the slopes for ADNI and CS to keep axes the same
+    all.lm.plotData<-tibble()
+    for(hemi in c("Left","Right")){
+      for(template in plotTemplates){
+          lm.plotData <-organize_LM_simple(paste0(hemi,"-",brainVar),templateName = template,df = plotData.allTestRetest.long,sessions = c(1,2,3,4,5,6))
+          all.lm.plotData<-bind_rows(all.lm.plotData,lm.plotData)
+      }
+    }
+    
+    
+    axisMin<-(min(all.lm.plotData$slope) - max(all.lm.plotData$slope) *.08)/1000
+    axisMax<-(max(all.lm.plotData$slope) + max(all.lm.plotData$slope) *.08)/1000
+    ylab <- paste0("Retest Session ",longLabel)
+    xlab <- paste0("Test Session ",longLabel)
+    
+    # Create a column for the Unicode symbols based on the Hemi column
+    plotDataWide <- plotDataWide %>% mutate(shape = ifelse(Hemi == "Left", left_half_circle, right_half_circle))
+    
+    p4<-ggplot(data = plotDataWide,aes(x = Test, y = Retest, label = shape,color = dx)) +
+    geom_segment(x= axisMin, y= axisMin, xend= axisMax, yend= axisMax, linetype="dashed", size=1, color="black") +
+    geom_text(size = 12, family = "Arial Unicode MS",show.legend = c(colour = FALSE, shape = TRUE),alpha = 0.8) +
+    scale_shape_manual(name=" ", values=c(15,17),labels = c(as.expression(bquote(Left~ (R == .(r_L)))),as.expression(bquote(Right~ (R == .(r_R))))))+
+    geom_point(aes(x= Test, y= Retest, shape= Hemi, colour=dx),  size=4,alpha=0,show.legend = c(colour = FALSE, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits = c(axisMin, axisMax), breaks = pretty_breaks(n = 5)) +  # Set 5 breaks for x-axis
+    scale_y_continuous(limits = c(axisMin, axisMax), breaks = pretty_breaks(n = 5)) +  # Set 5 breaks for y-axis
+    coord_equal(expand=F, xlim=c(axisMin, axisMax),ylim=c(axisMin, axisMax)) +  
+    labs(x=xlab, y=ylab) + guides(colour = "none") +
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+    
+    figure <- ggarrange(p1, p2,p3,p4, ncol = 2, nrow = 2)
+    #figure <- ggarrange(p1, p2,p3,p4, ncol = 2, nrow = 2,widths = c(1, 1.03)) #Use this for the issue where the margins of some plots are bigger and axes don't line up
+    
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/plot.InterceptAndSlope.ADNIandCS_8.",brainVar,".240803.png"),
+         plot = figure,dpi = 500,width = 12,height = 12,units = "in",bg = "white",device = "png")
+    
+      
+#  }    
+}
+
+
+######################################
+#### Unilateral Plots
+######################################
+
+plotTemplates<-c("ADNI_1_test","CSx6_8_test","ADNI_1_retest","CSx6_8_retest")
+for(brainVar in unilateralBrainVars[1]){
+  #for(plotTemplate in c("ADNI_1","CSx6_8")){
+    #####
+    ## baseline Cross-Sectional Test-retest
+    #####
+    
+    #Grab Label
+    labels<-as_vector(labelTable %>% filter(bvar == brainVar))
+    axisLabel<-labels[2]
+    unit<-labels[3]
+    
+    plotTemplate<-"ADNI_1"
+    scan<-"1.0_ADNI_a"
+    #####
+    ## baseline Cross-Sectional Test-retest
+    #####
+  
+    plotDataLong <- plotData.allTestRetest.cross %>% filter(scanID == scan & region == brainVar & session < 3)
+    ### Average scans if there are multiple to display the effect of averaging cluster
+    plotDataLong <- plotDataLong %>% group_by(ID,dx, SessionWithinVisit,region) %>% summarise(value = mean(value)/1000) %>%
+      ungroup() %>% mutate(SessionWithinVisit = str_to_title(SessionWithinVisit))
+    plotDataWide <- plotDataLong %>% pivot_wider(names_from = SessionWithinVisit,values_from = value)
+  
+    r<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide))$r.squared))
+    
+    ###Plot variables
+    
+    ##Set the same axis for ADNI and CS
+    
+    axisData<- plotData.allTestRetest.cross %>% filter(scanID %in% c(CS1mmScans,"1.0_ADNI_a") & region == brainVar & session < 3)
+    axisData <- axisData %>% mutate(scanType = sapply(str_split(scanID, "_"), `[`, 2)) ##Grab ADNI and CSx6 for combining
+    axisData <- axisData %>% group_by(ID,dx, SessionWithinVisit,region,scanType) %>% summarise(value = mean(value)) %>% ungroup()
+    axisMin.cross<-(min(axisData$value) - max(axisData$value) *.03) /1000
+    axisMax.cross<-(max(axisData$value) + max(axisData$value) *.03) /1000
+    xlab <- ""
+    ylab <- paste0("Session 2 ",axisLabel)
+    
+    p1<-ggplot(data= plotDataWide) +
+    geom_segment(x= axisMin.cross, y= axisMin.cross, xend= axisMax.cross, yend= axisMax.cross, linetype="dashed", size=1, color="black") +
+    scale_shape_manual(name=" ", values=c(16),labels = c(as.expression(bquote(R == .(r)))))+
+    geom_point(aes(x= Test, y= Retest, colour=dx,shape = brainVar),  size=6,alpha=0.8,show.legend = c(colour = F, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    scale_y_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    coord_equal(expand=F, xlim=c(axisMin.cross, axisMax.cross),ylim=c(axisMin.cross, axisMax.cross)) +  
+    labs(x=xlab, y=ylab) + 
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+    
+
+  ## 6 session Slope Test-retest
+  #####
+    
+    ## Get all the slopes for each person    
+    lm.plotData.1 <-organize_LM_simple(brainVar,paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+          mutate(region=brainVar, session = "Test")
+    lm.plotData.2 <-organize_LM_simple(brainVar,paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>% 
+      mutate(region=brainVar, session = "Retest")
+    
+    plotDataLong <- bind_rows(lm.plotData.1,lm.plotData.2) %>% mutate(slope = slope/1000)
+    plotDataWide <- plotDataLong %>% select(ID,dx,region,session,slope) %>% pivot_wider(names_from = c(session),values_from = slope)
+  
+    r<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide))$r.squared))
+    
+    ###Plot variables
+    ###Get all the slopes for ADNI and CS to keep axes the same
+    all.lm.plotData<-tibble()
+    for(template in plotTemplates){
+        lm.plotData <-organize_LM_simple(brainVar,templateName = template,df = plotData.allTestRetest.long,sessions = c(1,2,3,4,5,6))
+        all.lm.plotData<-bind_rows(all.lm.plotData,lm.plotData)
+    }
+  
+    
+    axisMin<-(min(all.lm.plotData$slope) - max(all.lm.plotData$slope) *.05)/1000
+    axisMax<-(max(all.lm.plotData$slope) + max(all.lm.plotData$slope) *.05)/1000
+    xlab <- ""
+    ylab <- ""
+    
+    p2<-ggplot(data= plotDataWide) +
+    geom_segment(x= axisMin, y= axisMin, xend= axisMax, yend= axisMax, linetype="dashed", size=1, color="black") +
+    scale_shape_manual(name=" ", values=c(16),labels = c(as.expression(bquote(R == .(r)))))+
+    geom_point(aes(x= Test, y= Retest, shape= brainVar, colour=dx),  size=6, alpha = 0.8) + 
+  theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin, axisMax))+
+    scale_y_continuous(limits=c(axisMin, axisMax))+
+    coord_equal(expand=F, xlim=c(axisMin, axisMax),ylim=c(axisMin, axisMax)) +  
+    labs(x=xlab, y=ylab) + guides(colour = "none") +
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+  
+    
+    
+    plotTemplate<-"CSx6_8"
+  
+    plotDataLong <- plotData.allTestRetest.cross %>% filter(str_detect(template,paste0(plotTemplate,"_")) & region == brainVar & session < 3)
+    ### Average scans if there are multiple to display the effect of averaging cluster
+    plotDataLong <- plotDataLong %>% group_by(ID,dx, SessionWithinVisit,region) %>% summarise(value = mean(value)/1000) %>%
+      ungroup() %>% mutate(SessionWithinVisit = str_to_title(SessionWithinVisit))
+    plotDataWide <- plotDataLong %>% pivot_wider(names_from = SessionWithinVisit,values_from = value)
+  
+    r<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide))$r.squared))
+    
+    ###Plot variables
+    
+    ##Set the same axis for ADNI and CS
+    axisData<- plotData.allTestRetest.cross %>% filter(region == brainVar & session < 3)
+    axisData <- axisData %>% group_by(ID,dx, SessionWithinVisit,region) %>% summarise(value = mean(value)/1000) %>% ungroup()
+    axisMin<-(min(axisData$value) - max(axisData$value) *.03)/1000
+    axisMax<-(max(axisData$value) + max(axisData$value) *.03)/1000
+    xlab <- paste0("Session 1 ",axisLabel)
+    ylab <- paste0("Session 2 ",axisLabel)
+    
+    p3<-ggplot(data= plotDataWide) +
+    geom_segment(x= axisMin.cross, y= axisMin.cross, xend= axisMax.cross, yend= axisMax.cross, linetype="dashed", size=1, color="black") +
+    scale_shape_manual(name=" ", values=c(16),labels = c(as.expression(bquote(R == .(r)))))+
+    geom_point(aes(x= Test, y= Retest, colour=dx,shape = brainVar),  size=6,alpha=0.8,show.legend = c(colour = FALSE, shape = TRUE)) + 
+    theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    scale_y_continuous(limits=c(axisMin.cross, axisMax.cross))+
+    coord_equal(expand=F, xlim=c(axisMin.cross, axisMax.cross),ylim=c(axisMin.cross, axisMax.cross)) +  
+    labs(x=xlab, y=ylab) + 
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+    
+
+  ## 6 session Slope Test-retest
+  #####
+    
+    ## Get all the slopes for each person    
+    lm.plotData.1 <-organize_LM_simple(brainVar,paste0(plotTemplate,"_test"),plotData.allTestRetest.long,sessions = c(1,3,5)) %>% 
+          mutate(region=brainVar, session = "Test")
+    lm.plotData.2 <-organize_LM_simple(brainVar,paste0(plotTemplate,"_retest"),plotData.allTestRetest.long,sessions = c(2,4,6)) %>% 
+      mutate(region=brainVar, session = "Retest")
+    
+    plotDataLong <- bind_rows(lm.plotData.1,lm.plotData.2) %>% mutate(slope=slope/1000)
+    plotDataWide <- plotDataLong %>% select(ID,dx,region,session,slope) %>% pivot_wider(names_from = c(session),values_from = slope)
+  
+    r<-sprintf("%02.2f",sqrt(summary(lm(Test ~ Retest, data=plotDataWide))$r.squared))
+    
+    ###Plot variables
+    ###Get all the slopes for ADNI and CS to keep axes the same
+    all.lm.plotData<-tibble()
+    for(template in plotTemplates){
+        lm.plotData <-organize_LM_simple(brainVar,templateName = template,df = plotData.allTestRetest.long,sessions = c(1,2,3,4,5,6))
+        all.lm.plotData<-bind_rows(all.lm.plotData,lm.plotData)
+    }
+  
+    
+    axisMin<-(min(all.lm.plotData$slope) - max(all.lm.plotData$slope) *.05)/1000
+    axisMax<-(max(all.lm.plotData$slope) + max(all.lm.plotData$slope) *.05)/1000
+    xlab <- paste0("Session 1 ",axisLabel)
+    ylab <- ""
+    
+    p4<-ggplot(data= plotDataWide) +
+    geom_segment(x= axisMin, y= axisMin, xend= axisMax, yend= axisMax, linetype="dashed", size=1, color="black") +
+    scale_shape_manual(name=" ", values=c(16),labels = c(as.expression(bquote(R == .(r)))))+
+    geom_point(aes(x= Test, y= Retest, shape= brainVar, colour=dx),  size=6, alpha = 0.8) + 
+  theme_classic() +  scale_color_manual(values = dxColors,name = "") +
+    scale_x_continuous(limits=c(axisMin, axisMax))+
+    scale_y_continuous(limits=c(axisMin, axisMax))+
+    coord_equal(expand=F, xlim=c(axisMin, axisMax),ylim=c(axisMin, axisMax)) +  
+    labs(x=xlab, y=ylab) + guides(colour = "none") +
+    theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 0.75),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+    
+    
+    figure <- ggarrange(p1, p2,p3,p4, ncol = 2, nrow = 2)
+
+  
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/plot.InterceptAndSlope.ADNIandCS_8.",brainVar,".240722.png"),
+         plot = figure,dpi = 500,width = 12,height = 12,units = "in",bg = "white",device = "png")
+    
+      
+#  }    
+}
+
+
+
+#######################################################
+##### ROI Pooling Error plots - Baseline and Longitudinal
+######################################################
+
+#### Errors for long and cross were generated by the script ClusterLong_wrangleData_240803 - for 38 subs with 6 sessions of test-retest (no MCInos dxs)
+
+### Long Errors
+allMorphData.long <-read_csv(paste0(altPath,"/Manuscripts/ClusterLong/Data/allMorph.SlopeError.SummaryData.240803.csv"))
+allMorphData.long$type<-"Longitudinal Rate of Change"
+
+
+allMorphData.cross <- read_rds(paste0("/path/to/data/Manuscripts/ClusterLong/Data/baselineTestRetest.CrossSectional.ErrorSummary_240803.rds"))
+allMorphData.cross$type<-"Cross-Sectional Baseline"
+allMorphData.cross<-allMorphData.cross %>% rename(sampSize = numIDs)
+
+allMorphData.long<-allMorphData.long %>% rename(template = label,mean.error.percent = meanSlopeError.percent, 
+                                                mean.error.raw = meanSlopeError,sd.error.raw = sdAbsError,sd.error.percent = sdAbsError.percent) %>% 
+  select(all_of(names(allMorphData.cross)))
+
+
+allMorphData <- bind_rows(allMorphData.cross,allMorphData.long)
+
+allMorphData$origData <- factor(allMorphData$origData, levels = c("GWcon","vol", "Thick"))
+
+allMorphData<-allMorphData %>% mutate(template = factor(template)) %>% mutate(template = fct_recode(template,
+                               "Standard" = "ADNI_1",
+                               "CS" = "CSx6_1",
+                               "2-CS" = "CSx6_2",
+                               "4-CS" = "CSx6_4",
+                               "8-CS" = "CSx6_8",
+                               "Standard" = "1 ADNI",
+                               "CS" = "1 CS",
+                               "2-CS" = "2 CS",
+                               "4-CS" = "4 CS",
+                               "8-CS" = "8 CS"))
+
+allMorphData$template <- factor(allMorphData$template, levels = c("Standard","CS","2-CS","4-CS","8-CS"))
+
+allMorphData<-allMorphData %>% mutate(origData = fct_recode(origData,
+                               "GWR" = "GWcon",
+                               "Thickness" = "Thick",
+                               "Volume" = "vol"))
+
+
+allMorphData<-allMorphData %>% mutate(se.error.percent = sd.error.percent/sqrt(sampSize),se.error.raw = sd.error.raw/sqrt(sampSize))
+
+custom_colors <- c("Left" = "#8cb369", "Right" = "#bc4b51")
+
+custom_labels <- function(x) {
+  ifelse(x == 0, "0", sprintf("%.1f", x))}
+
+#### Stats for results section - grab from df below
+allMorphData.hipp <- allMorphData %>% filter(str_detect(brainVar, paste0("-","Hippocampus")))
+
+
+###Bilateral error reduction of baseline error and slope error
+
+for(var in bilateralBrainVars){
+  
+  #Grab Labels
+  labels<-as_vector(labelTable %>% filter(bvar == var))
+  axisLabel<-labels[2]
+  unit<-labels[3]
+  longAxisLabel <- labels[4]
+    
+  plotData_Combined<-allMorphData %>% filter(str_detect(brainVar, paste0("-",var)))
+  plotData_Combined<- plotData_Combined %>% separate(brainVar, into = c("hemi", "brainVar"), sep = "-")
+  axisMax<-(max(plotData_Combined$mean.error.raw) + max(plotData_Combined$se.error.raw)) * 1.03
+  
+  x_ticks <- levels(plotData_Combined$template)
+  first_tick <- as.numeric(1)
+  second_tick <- as.numeric(2)
+  
+  ###Make Cross plot with raw error
+  plotData_Combined.cross<- plotData_Combined %>% filter(type == "Cross-Sectional Baseline")
+  p1<-ggplot(plotData_Combined.cross, aes(x = template, y = mean.error.raw, fill = hemi)) +
+    geom_bar(stat = "identity", color = "black", position = position_dodge(width = 0.7), width = 0.7,show.legend = F) +
+    geom_errorbar(aes(ymin = mean.error.raw - se.error.raw, ymax = mean.error.raw + se.error.raw), width = 0.2, position = position_dodge(width = 0.7)) +
+    scale_fill_manual(values = custom_colors) +
+    labs(x = "", y = bquote(.(axisLabel) ~ "Error (mm"^3*")")) + #ggtitle(axisLabel) +
+    scale_y_continuous(limits=c(0, axisMax),expand = c(0,0),labels = custom_labels) +
+    theme_classic() + 
+        theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 1),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16, margin = margin(r = 7)),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+
+  
+  ###Make Longitudinal plot
+  plotData_Combined.long<- plotData_Combined %>% filter(type == "Longitudinal Rate of Change")
+  p2<-ggplot(plotData_Combined.long, aes(x = template, y = mean.error.raw, fill = hemi)) +
+    geom_bar(stat = "identity", color = "black", position = position_dodge(width = 0.7), width = 0.7,show.legend = F) +
+    geom_errorbar(aes(ymin = mean.error.raw - se.error.raw, ymax = mean.error.raw + se.error.raw), width = 0.2, position = position_dodge(width = 0.7)) +
+    scale_fill_manual(values = custom_colors) +
+    labs(x = "", y = bquote(.(longAxisLabel) ~ "Error (mm"^3*")")) + #ggtitle(axisLabel) +
+    scale_y_continuous(limits=c(0, axisMax),expand = c(0,0),labels = custom_labels) +
+    theme_classic() + 
+        theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks = element_line(colour = "black", size = 1),
+          axis.text =  element_text(color="black",size=14),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16, margin = margin(r = 7)),
+          legend.text = element_text(size=14),
+         # plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          legend.position=c(0.01,1), 
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10))) 
+  
+  
+  figure <- ggarrange(p1, p2, ncol = 2, nrow = 1) 
+  figure_with_title <- annotate_figure(figure, top = text_grob(axisLabel, size = 18))
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.",var,".241014.png"),
+         plot = figure,dpi = 500,width = 12,height = 6,units = "in",bg = "white",device = "png")
+}
+
+### Unilateral
+
+for(var in unilateralBrainVars[1]){
+  
+  labels<-as_vector(labelTable %>% filter(bvar == var))
+  axisLabel<-labels[2]
+  unit<-labels[3]
+  
+  plotData_Combined<-allMorphData %>% filter(brainVar == var)
+  axisMax<-(max(plotData_Combined$mean.error.percent) + max(plotData_Combined$se.error.percent)) * 1.03
+  
+  ###Make Cross plot
+  plotData_Combined.cross<- plotData_Combined %>% filter(type == "Cross-Sectional Baseline")
+  p1<-ggplot(plotData_Combined.cross, aes(x = template, y = mean.error.percent,fill = brainVar)) +
+    geom_bar(stat = "identity", color = "black", position = position_dodge(width = 0.7), width = 0.7,show.legend = FALSE) +
+    geom_errorbar(aes(ymin = mean.error.percent - se.error.percent, ymax = mean.error.percent + se.error.percent), width = 0.2, position = position_dodge(width = 0.7)) +
+    scale_fill_manual(values = "#8cb369") +
+    labs(x = "", y = paste0(axisLabel," Error (%)")) +
+    scale_y_continuous(limits=c(0, axisMax),expand = c(0,0)) +
+    theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"),
+                            axis.title.y = element_text(size = 22),
+                            axis.line = element_line(color = "black", size = 1))
+  
+  ###Make Longitudinal plot
+  plotData_Combined.long<- plotData_Combined %>% filter(type == "Longitudinal Rate of Change")
+  p2<-ggplot(plotData_Combined.long, aes(x = template, y = mean.error.percent, fill = brainVar)) +
+    geom_bar(stat = "identity", color = "black", position = position_dodge(width = 0.7), width = 0.7,show.legend = FALSE) +
+    geom_errorbar(aes(ymin = mean.error.percent - se.error.percent, ymax = mean.error.percent + se.error.percent), width = 0.2, position = position_dodge(width = 0.7)) +
+    scale_fill_manual(values = "#8cb369") +
+    labs(x = "", y = "") + #ggtitle(axisLabel) +
+    scale_y_continuous(limits=c(0, axisMax),expand = c(0,0)) +
+    theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"),axis.title.y = element_text(size = 18),
+                            axis.line = element_line(color = "black", size = 1),axis.text.y = element_blank(),axis.ticks = element_line(size = 1))
+  
+    #### Make Confidence width plot
+  
+    confWidthData<-tibble()
+    adni.1<-organize_LM_simple(var,"ADNI_inclusive",plotData.allTestRetest.long,sessions = c(1,3,5))
+    adni.2<-organize_LM_simple(var,"ADNI_inclusive",plotData.allTestRetest.long,sessions = c(1:6))
+    confWidthData<-bind_rows(confWidthData,adni.1)
+    confWidthData<-bind_rows(confWidthData,adni.2)
+    for(i in c(1,2,4,8)){
+      cs<-organize_LM_simple(var,paste0("CSx6_",i,"_test"),plotData.allTestRetest.long,scans =CS1mmScans[1:i] ,sessions = c(1,3,5))
+      confWidthData<-bind_rows(confWidthData,cs)
+    }
+    cs<-organize_LM_simple(var,"CSx6_inclusive",plotData.allTestRetest.long,sessions = c(1:6))
+    confWidthData<-bind_rows(confWidthData,cs)
+    confWidthData <- confWidthData %>% mutate(CIsize = abs(per.conf.high - per.conf.low))
+
+  sum.confWidthData <- confWidthData %>% group_by(template,nScans) %>% summarise(meanCIsize = mean(CIsize),sdCIsize = sd(CIsize), N=n()) %>% mutate(seCIsize = sdCIsize/sqrt(N))
+  sum.confWidthData <- bind_cols(sum.confWidthData,tibble(tempName = c("ADNI","2-ADNI","CS","2-CS","4-CS","8-CS","16-CS")))
+  sum.confWidthData <- sum.confWidthData %>% filter(tempName != "2-ADNI")
+  
+  sum.confWidthData$tempName <- factor(sum.confWidthData$tempName, levels = c("ADNI","CS","2-CS","4-CS","8-CS","16-CS"))
+  axisMax<-(max(sum.confWidthData$meanCIsize)+max(sum.confWidthData$seCIsize)*1.02)
+  
+    p3<-ggplot(sum.confWidthData, aes(x = tempName, y = meanCIsize, fill = hemi)) +
+    geom_bar(stat = "identity", color = "black", position = position_dodge(width = 0.7), width = 0.7,show.legend = F) +
+    geom_errorbar(aes(ymin = meanCIsize - seCIsize, ymax = meanCIsize + seCIsize), width = 0.2, position = position_dodge(width = 0.7)) +
+    scale_fill_manual(values = "#8cb369") +
+    labs(x = "", y = "Width of 95% Confidence Interval") + #ggtitle(axisLabel) +
+    scale_y_continuous(limits = c(0,axisMax),expand = c(0,0)) +
+    theme_classic() + 
+    theme(
+    plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),
+    axis.text = element_text(size = 18,color="black"),
+    axis.title.y = element_text(size = 22),
+    axis.line = element_line(color = "black", size = 1),
+    legend.position = c(0.9, 0.8), # Adjust position to move the legend down and to the left
+    legend.justification = c("right", "top"), # Adjust justification
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.key.spacing.y = unit(0.2, 'cm'), # Add space between legend boxes
+    #axis.text.y = element_blank(),
+    axis.ticks = element_line(size = 1)
+  )
+
+  
+  
+  figure <- ggarrange(p1, p2,p3, ncol = 3, nrow = 1) 
+
+  figure_with_title <- annotate_figure(figure, top = text_grob(axisLabel, size = 18)
+)
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.",var,".240823.png"),
+         plot = figure,dpi = 500,width = 18,height = 6.5,units = "in",bg = "white",device = "png")
+}
+
+
+##Combine into grid
+
+p1<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.Hippocampus.240823.png")) %>% image_ggplot(interpolate = T)
+p2<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.ADsignature_CT.240823.png")) %>% image_ggplot(interpolate = T)
+p6<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.WMH.240823.png")) %>% image_ggplot(interpolate = T)
+
+p3<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.FTDsignature_CT.240823.png")) %>% image_ggplot(interpolate = T)
+p4<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.totalBrainVolume.240823.png")) %>% image_ggplot(interpolate = T)
+p5<-image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/baselineAndSlopeErrorReduction.totalLateralVentricle.240823.png")) %>% image_ggplot(interpolate = T)
+
+
+figure <- ggarrange(p2,p5,p6,p4, ncol = 1, nrow = 4)
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/gridSupp.baselineAndSlopeErrorReduction.percent.250128.png"),
+         plot = figure,dpi = 500,width = 18,height = 26,units = "in",bg = "white",device = "png")
+
+figure <- ggarrange(p3,p4,p5, ncol = 1, nrow = 3)
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/grid2.baselineAndSlopeErrorReduction.percent.240823.png"),
+         plot = figure,dpi = 500,width = 18,height = 19.5,units = "in",bg = "white",device = "png")
+
+
+
+##############################
+### All morphometrics figure
+##############################
+
+### Make summary
+
+allMorphData.summary<-allMorphData %>% filter(brainVar %in% paperRegions$value) %>% separate(brainVar, into = c("hemi", "brainVar"), sep = "-") %>% group_by(type,hemi,origData,template) %>% summarise(meanError = mean(mean.error.percent), seError = mean(se.error.percent))
+
+##palette inspired by this website - https://pmassicotte.github.io/paletteer_gallery/#sequential-1
+#custom_colors <- c("1 ADNI" = "#F5CB63FF","1 CS" = "#B7E1D7FF","2 CS" = "#6CB6C4FF","4 CS" = "#3589A9FF","8 CS" = "#2C5A86FF","3 ADNI" = "#F5CB63FF","3 CS" = "#B7E1D7FF","6 CS" = "#6CB6C4FF","12 CS" = "#3589A9FF","24 CS" = "#2C5A86FF")
+custom_colors <- c("Left" = "#8cb369", "Right" = "#bc4b51")
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "GWR")
+ymax<-max(templateSummary.Error.GWR$meanError)+max(templateSummary.Error.GWR$seError)*1.03
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "GWR",type == "Cross-Sectional Baseline")
+p1.cross<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "Gray/White Ratio Error (%)") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1), axis.text = element_text(size = 18,color="black"), 
+                          axis.title.y = element_text(size = 18), axis.line = element_line(color = "black", size = 1)) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20),legend.position = "none" , 
+        axis.text.x = element_text(size = 18), axis.title.y = element_text(size = 22), axis.ticks = element_line(size = 1)) +
+  scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels) +
+  scale_fill_manual(values = custom_colors)
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "GWR",type == "Longitudinal Rate of Change")
+p1.long<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"), 
+                          axis.title.y = element_text(size = 18), axis.line = element_line(color = "black", size = 1), 
+                          legend.position = "none",
+                          legend.justification = c("right", "top"), # Adjust justification
+                          legend.title = element_blank(),
+                          legend.text = element_text(size = 16),
+                          legend.key.spacing.y = unit(0.2, 'cm')) + # Add space between legend boxes) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20), 
+        axis.text.x = element_text(size = 18), axis.title.y = element_text(size = 18), axis.text.y = element_blank(),axis.ticks = element_line(size = 1)) +
+  scale_fill_manual(values = custom_colors) + scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels)
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Thickness")
+ymax<-max(templateSummary.Error.GWR$meanError)+max(templateSummary.Error.GWR$seError)*1.03
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Thickness",type == "Cross-Sectional Baseline")
+p2.cross<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "Thickness Error (%)") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"),
+                          axis.title.y = element_text(size = 22), axis.line = element_line(color = "black", size = 1)) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20),legend.position = "none" , 
+        axis.text.x = element_text(size = 18), axis.ticks = element_line(size = 1)) +
+  scale_fill_manual(values = custom_colors) + scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels)
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Thickness",type == "Longitudinal Rate of Change")
+p2.long<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"),axis.title.y = element_text(size = 18),
+                            axis.line = element_line(color = "black", size = 1)) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20),legend.position = "none" , axis.text.x = element_text(size = 18), 
+        axis.title.y = element_text(size = 18), axis.text.y = element_blank(),axis.ticks = element_line(size = 1)) +
+  scale_fill_manual(values = custom_colors) + scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels)
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Volume")
+ymax<-max(templateSummary.Error.GWR$meanError)+max(templateSummary.Error.GWR$seError)*1.03
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Volume",type == "Cross-Sectional Baseline")
+p3.cross<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "Volume Error (%)") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"),
+                          axis.title.y = element_text(size = 22),
+                          axis.line = element_line(color = "black", size = 1)) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20),legend.position = "none" ,
+        axis.ticks = element_line(size = 1)) +
+  scale_fill_manual(values = custom_colors) + scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels)
+
+templateSummary.Error.GWR <- allMorphData.summary %>% filter(origData == "Volume",type == "Longitudinal Rate of Change")
+p3.long<-ggplot(templateSummary.Error.GWR, aes(x = template, y = meanError, fill = hemi)) +
+  geom_bar(stat = "identity",color = "black", width = 0.7,position = position_dodge(width = 0.8)) +
+  geom_errorbar(aes(ymin = meanError - seError, ymax = meanError + seError), width = 0.2,position = position_dodge(width = 0.8)) +
+  labs(x = "", y = "") +
+  theme_classic() + theme(plot.title = element_text(size = 18, hjust = 0.5, vjust = 1),axis.text = element_text(size = 18,color="black"), 
+                          axis.title.y = element_text(size = 22), axis.line = element_line(color = "black", size = 1), 
+                          legend.position = c(0.9, 0.7), # Adjust position to move the legend down and to the left
+                          legend.justification = c("right", "top"), # Adjust justification
+                          legend.title = element_blank(),
+                          legend.text = element_text(size = 18),
+                          legend.key.spacing.y = unit(0.2, 'cm')) + # Add space between legend boxes) +
+  theme(text = element_text(family = "Helvetica"), plot.title = element_text(hjust = 0.5,size = 20), 
+        axis.text.x = element_text(size = 18), axis.title.y = element_text(size = 18), axis.text.y = element_blank(),axis.ticks = element_line(size = 1)) +
+  scale_fill_manual(values = custom_colors) + scale_y_continuous(limits = c(0,ymax),expand = expansion(mult = c(0, 0.05)),labels = custom_labels)
+
+figure <- ggarrange(p3.cross, p3.long,p2.cross,p2.long,p1.cross,p1.long, ncol = 2, nrow = 3)
+
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/group.perChange.allMorphsMeanErrorBarplot.240803.png"),figure,dpi = 500,width = 12, height = 19.5,units = "in",bg = "white")
+
+
+
+##########################################
+####### All Individuals Hippocampal Decline All CS
+##########################################
+
+
+brainVar="Hippocampus"
+p1<-generate_plot_Bilateral_percentChangeSummary(brainVar,templateName = "CSx6_inclusive",data = plotData.allTestRetest.long,title = "",sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/groupPerChange/group.perChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6.2,units = "in",bg = "white")
+
+brainVar="ADsignature_CT"
+p1<-generate_plot_Bilateral_percentChangeSummary(brainVar,"CSx6_inclusive",plotData.allTestRetest.long,title = paste0("AD Signature Cortical Thinning"),sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/groupPerChange/group.perChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6,units = "in",bg = "white")
+
+brainVar="totalLateralVentricle"
+##Make this raw change instead of percent - make a new function... 
+p1<-generate_plot_Bilateral_ChangeSummary(brainVar,"CSx6_inclusive",plotData.allTestRetest.long,title = paste0("Ventrical Growth"),sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/groupPerChange/group.rawChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6,units = "in",bg = "white")
+
+brainVar="WMH"
+p1<-generate_plot_ChangeSummary("WMH","CSx6_inclusive",plotData.allTestRetest.long,title = paste0("White Matter Hypointensity Growth"),sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/groupPerChange/group.rawChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6,units = "in",bg = "white")
+
+
+brainVar="FTDsignature_CT"
+##Make this raw change instead of percent - make a new function... 
+p1<-generate_plot_Bilateral_percentChangeSummary(brainVar,"CSx6_inclusive",plotData.allTestRetest.long,title = paste0("FTLD Signature Cortical Thinning"), sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/group.rawChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6,units = "in",bg = "white")
+
+brainVar="totalBrainVolume"
+p1<-generate_plot_Bilateral_percentChangeSummary(brainVar,"CSx6_inclusive",plotData.allTestRetest.long,title = paste0("Total Brain Volume Atrophy"),sessions = c(1:6))
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/TestRetest_InterceptAndSlope/group.rawChange.IndividualAtrophyRates.",brainVar,".250221.png"),p1,dpi = 500,width = 12, height = 6,units = "in",bg = "white")
+```
+
+
+
+```{r Hippocampus plots and Dashboard 1.0}
+#################
+####### Dashboard for Participants of particlar interest
+################
+
+
+### Dashboad Candidates - 
+### Dashboard ROI candidates - Hippocampus, AD CT mask, Mean GWcon, Mean SA, Mean Thickness, Mean GMvol, sum of ventricles, WM- HypoIntensities
+allBrainVars<-unique(allFSdataLong$region)
+brainVar="Hippocampus"
+i=""
+i=""
+
+#Only for first 6 sessions
+plotData.6sesh.only6sessions <- plotData.6sesh %>% filter(session %in% 1:6)
+
+dashboardIDs <- c("")
+
+i="" # "P10091"
+
+for(i in c("","")){#dashboardIDs){
+  demo.id <-demo %>% filter(ID ==i)
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive",title = "Hippocampus Volume",yaxisMargin = 1)
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","AD Signature Thickness")
+  a3<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "entorhinal","Thick","CSx6_inclusive","AD Signature Thickness")
+  #a3<-generate_plot(i, "MeanThickness","Thick","inclusive","Mean Cortical Thickness")
+  #a4<-generate_plot_testRetest(i, "MeanGWCon","GWcon","inclusive", "Mean Gray-White Ratio")
+  #a4<-generate_plot_testRetest(i, "ADsignature","GWcon","inclusive", "AD Signature Gray-White Ratio")
+  a4<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "FTDsignature_CT","Thick","CSx6_inclusive","FTLD Signature Thickness")
+ # a5<-generate_plot_testRetest(i, "WhiteSurfArea_area","Area","inclusive","Total Surface Area")
+  #a6<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "Amygdala","vol","CSx6_inclusive", "Amygdala")
+  
+  ###Global plots to be combined
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH","vol","CSx6_inclusive", "WMH Volume")
+ # a8<-generate_plot_global(i, "BrainSegVolNotVentSurf","vol","inclusive", "WM Hypointensities")
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle","vol","CSx6_inclusive", "Total Ventricle Volume")
+  a10<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "CerebellumCortex","vol","CSx6_inclusive", "Cerebellum Volume")
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf","vol","CSx6_inclusive", "Total Brain Volume")
+  #a10<-generate_plot_testRetest(df = plotData.allTestRetest.long,i, "totalBrainVolume","vol","CSx6_inclusive", "Total Brain Volume")
+  globalFig1 <- ggarrange(a7, a11 ,ncol = 2, nrow = 1)
+  #globalFig2 <- ggarrange(a7, a9,ncol = 2, nrow = 1)
+  ###Read in CT map
+  ## These maps were counterintuitively made on Fasse - /ncf/cnl07/Users/Max/Cluster/ 
+  img <- image_read(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Snaps/",i,".CSx6_16.top3.bottom0.spcChange.fwhm15.fsaverage6.png"))
+  # Get image dimensions to calculate the aspect ratio
+  img_info <- image_info(img)
+  
+  # Crop the top title off of the image because we don't need another label
+  crop_height <- img_info$height# - 100
+  crop_width <- img_info$width
+  #crop_geometry <- sprintf("%dx%d+0+100", crop_width, crop_height)
+  
+  # Crop the image
+  cropped_img <- image_crop(img, crop_geometry)
+  
+  aspect_ratio <-  crop_height / crop_width
+  
+  # Convert the image to a raster object
+  img_raster <- as.raster(img)
+  
+  # Create a ggplot object from the raster object with correct aspect ratio
+  gg_img <- ggplot() +
+    annotation_custom(
+      rasterGrob(img_raster, width = unit(1, "npc"), height = unit(1, "npc")),
+      xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+    ) +
+    theme_void() +  # Remove axes and background
+    theme(
+      aspect.ratio = aspect_ratio  # Maintain the aspect ratio
+    )
+    
+  #combFigure <- ggarrange(a1, a2,a4,a9,globalFig1,globalFig1,ncol = 2, nrow = 3)
+  combFigure <- ggarrange(a1, a2,a9,gg_img,a10,globalFig1,ncol = 2, nrow = 3)
+  ###Make a title for the combined figure
+  title <- ggdraw() + 
+    draw_label(paste0(i," | ",demo.id$dx," | ",demo.id$Age," | ",demo.id$Sex), size = 20, fontface = 'bold', hjust = 0.5, x = 0.5, y = .8, vjust = 1)
+  # Combine the title and the combined figure
+  outFigure <- plot_grid(title, combFigure, ncol = 1, rel_heights = c(0.025, 1))
+  ggsave(paste0(altPath,"Manuscripts/ClusterLong/Visualizations/Plots/Dashboard.allCS1mm.240808/",i,".Dashboard.png"),plot=combFigure,width = 12, height =12, unit="in", dpi=500,bg = "white")
+}
+
+#ggsave(paste0(altPath,"Manuscripts/ClusterLong/Visualizations/Plots/Dashboard.allCS1mm.240808/",i,".Hippocampus.png"),plot=a1,width = 6, height =4, unit="in", dpi=500,bg = "white")
+
+
+#################
+## Hippocampal Change plots for participants of interest
+#################
+
+dashboardIDs <- c("")
+
+i=""
+#Only for first 6 sessions
+plotData.6sesh.only6sessions <- plotData.6sesh %>% filter(session %in% 1:6) %>% filter(!str_ends(region, "_cm"))
+for(i in dashboardIDs){
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+ggsave(paste0(altPath,"Manuscripts/ClusterLong/Visualizations/Plots/ChangePlots_Hippocampus_101524/",i,".HippChange.png"),plot=a1,width = 6, height =3.2, unit="in", dpi=500,bg = "white")
+
+}
+
+#### stats for participants stats in results
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = "", brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = "", brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = "", brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = "", brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+a1<-generate_plot_testRetest(df = plotData.6sesh.only6sessions,id = "", brainVar = "Hippocampus",type = "vol",templateName = "CSx6_inclusive", title = "Hippocampus Volume")
+
+###########################
+## Table of Demographics
+demo_paper <- demo %>% filter(ID %in% allTestRetest.IDs, dx != "MCInos")
+
+demo_paper %>% group_by(dx) %>% summarise(count=n(),meanAge= mean(Age), ageRange = range(Age),numMale = sum(Sex == "M"))
+
+
+
+```
+
+
+```{r Dasboards 2.0 }
+###You are overloading memory so put variables here that you want to plot
+paperRegions<-read_csv("/path/to/data/Manuscripts/ClusterLong/Data/paperRegions.csv")
+
+plotRegions<-c("Left-ADsignature_CT","Right-ADsignature_CT", "Left-totalLateralVentricle","Right-totalLateralVentricle", "WMH", "Left-Hippocampus","Right-Hippocampus", "Left-MeanThickness", "Right-MeanThickness", "Left-Amygdala", "Right-Amygdala", "Left-parahippocampal", "Right-parahippocampal", "lhCerebralWhiteMatterVol", "Left-temporalpole", "rhCerebralWhiteMatterVol","Right-temporalpole","Right-entorhinal","Left-entorhinal", "Left-Cerebellum-Cortex", "Right-Cerebellum-Cortex", "Left-lateralorbitofrontal", "Right-lateralorbitofrontal","Left-rostralanteriorcingulate", "Right-rostralanteriorcingulate", "Left-fusiform", "Right-fusiform", "Left-medialorbitofrontal", "Right-medialorbitofrontal")
+
+paperRegions2<-c("BrainSegVolNotVentSurf", "Left-MeanThickness", "Right-MeanThickness","Left-ADsignature_CT","Right-ADsignature_CT") # "Left-MeanGWCon","Right-MeanGWCon", 
+
+paperRegions3<-c("WMH","Left-totalLateralVentricle","Right-totalLateralVentricle")
+
+###Data Wrangled in /path/to/data/Scripts/ClusterLong_wrangleData_240803.R
+allFSdataLong<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ClusterLong_240803_allFSdataLong.rds")) %>% filter(region %in% c(paperRegions$value,paperRegions2,plotRegions,paperRegions3))
+
+##Read in UKB means data and format to combine with Ind change data
+UKBmeans.all<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ukbFSchangeMeans.dashboardIDs.rds")) 
+UKBmeans.all <- UKBmeans.all %>% mutate(region = gsub("lh_", "Left-", region)) %>% mutate(region = gsub("lh", "Left-", region)) %>%
+  mutate(region = gsub("rh_", "Right-", region)) %>% mutate(region = gsub("rh", "Right-", region)) %>% 
+  mutate(region = gsub("WM-hypointensities", "WMH", region)) %>% mutate(region = gsub("_thickness", "", region)) %>%
+  mutate(region = gsub("Cerebellum-Cortex", "CerebellumCortex", region))%>% mutate(region = gsub("entoRight-inal","entorhinal", region)) 
+
+
+#Fix Cerebellum naming
+allFSdataLong <- allFSdataLong %>%
+  mutate(region = ifelse(region == "Left-Cerebellum-Cortex", "Left-CerebellumCortex", region)) %>% mutate(region = ifelse(region == "Right-Cerebellum-Cortex", "Right-CerebellumCortex", region))
+
+### Add in global as a type
+allFSdataLong <- allFSdataLong %>%
+  mutate(origData = if_else(region %in% paperRegions2, "global", origData))
+allFSdataLong <- allFSdataLong %>%
+  mutate(origData = if_else(region %in% paperRegions3, "liquid", origData))
+
+##Remove GWR for now
+allFSdataLong <- allFSdataLong %>% filter(origData != "GWcon")
+
+##Make a variable with both brain region and type so that you can loop through all variables
+allFSdataLong <- allFSdataLong %>% mutate(type.region = str_c(origData,region, sep = "."))
+plotData <- allFSdataLong %>% filter(ID %in% SixSeshIDs) %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos") %>% filter(ID %in% SixSeshIDs) %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos") %>% filter(session %in% c(1:6))
+
+
+###############
+###############
+###############
+##Chunk to make a participant dashboard
+
+###Grab Participant and template that you want
+dashboardIDs <- c("","","","","","","","")
+
+
+for(name in c("","","")){ 
+  temp= "CSx6_inclusive"
+  plotData.ID <- plotData %>% filter(ID == name, template == temp)
+  
+  ###Need to shift yaxes based on each dashboard subj
+  plotVars<-tibble(ID = c(""),
+                   liquidMin = c(-3,-18,-3,-3,-3,-13,-3,-3,-3),
+                   liquidMax = c(26,8,26,26,26,26,26,26,26),
+                   othersMin = c(-7.75,-2.5,-7.75,-12,-7.75,-7.75,-7.75,-9.5,-7.75),
+                   othersMax = c(3.3,8.5,3.3,2.75,3.3,4,4,4.5,4),
+                   latVentMargin = c(3,3,12,12,0,3,3,3,3)
+                  )
+  
+  plotVars.name<-plotVars %>% filter(ID == name)
+  
+  ### Generate rate of change estimates for all brainVariables
+  
+  
+  allBrainVars<-unique(plotData$type.region)
+  
+  var=allBrainVars[16]
+  
+  tmp.changeResults.ID<-tibble()
+  for(var in allBrainVars){
+    varShort<- str_split(var, pattern = "\\.", simplify = TRUE)[2]
+    plotData.ID.var <- plotData.ID %>% filter(type.region == var)
+    lm.out<-organize_LM_simple(varShort,"CSx6_inclusive",plotData.ID.var,sessions = c(1:6))
+    lm.out$type.region <- var
+    tmp.changeResults.ID<-bind_rows(tmp.changeResults.ID,lm.out)
+  }
+  
+  changeResults.ID<-tmp.changeResults.ID
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = type.region) %>% separate(type.region,into = c("type","region"),sep = "\\.")
+  changeResults.ID<-changeResults.ID %>% separate(region, into = c("hemi","bvar"),sep = "-",fill = "left",remove = F)
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = paste(type,bvar,hemi,sep = "."))
+  ###Add Non hemi - both
+  changeResults.ID<-changeResults.ID %>% mutate(hemi = ifelse(is.na(hemi), "Both", hemi))
+  
+  # Create a column for the Unicode symbols based on the Hemi column
+  # Define Unicode characters for half circles
+  left_half_circle <- "\u25D6"
+  right_half_circle <- "\u25D7"
+  circle <- "\u25CF"
+  changeResults.ID <- changeResults.ID %>% 
+    mutate(shape = case_when(
+    hemi == "Left"  ~ left_half_circle,
+    hemi == "Right" ~ right_half_circle,
+    hemi == "Both"  ~ circle, 
+    TRUE            ~ NA  # Optional: default case if more categories might exist
+  ))
+  
+  
+  ##Change typeAndRegion so that the x-axis is ordered how you want
+  changeResults.ID <- changeResults.ID %>% mutate(typeAndRegion = gsub("global\\.", "a.global.", typeAndRegion)) %>% 
+    mutate(typeAndRegion = gsub("vol\\.", "b.vol.", typeAndRegion)) %>%  mutate(typeAndRegion = gsub("Thick\\.", "c.Thick.", typeAndRegion)) %>%
+    mutate(typeAndRegion = gsub("liquid\\.", "d.liquid.", typeAndRegion))
+  
+  UKBmeans.ID <- UKBmeans.all %>% filter(ID == name) %>% select(ID,meanSPC,avgAge,region)
+  ### Add means to dataset
+  changeResults.ID <- left_join(changeResults.ID,UKBmeans.ID,by = c("region","ID"))
+  
+  ###### Make plot for individual dashboard
+  colors<-c("indianred2","skyblue2","seagreen3","goldenrod")
+
+
+  
+  changeResults.ID.liquid<-changeResults.ID %>% filter(type == "liquid")
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.liquid)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 40
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("d.a1", "d.z2")
+  changeResults.ID.liquid<-bind_rows(changeResults.ID.liquid,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.liquid <- changeResults.ID.liquid %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.liquid$plotRegion)
+  changeResults.ID.liquid <- changeResults.ID.liquid %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+
+pliquid<-ggplot(changeResults.ID.liquid, aes(plotRegion, perAnnChange, color = type,label = shape)) + 
+  theme_classic() + 
+  scale_color_manual(values = colors[2]) + 
+  #guides(color = FALSE) + 
+  geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+  geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+  #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+  #geom_point() +  
+  geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+  geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+  coord_cartesian(ylim = c(plotVars.name$liquidMin,plotVars.name$liquidMax),expand = F) +
+  scale_y_continuous(breaks = seq(-50,50,5))+
+  #scale_x_discrete(expand = c(0,0)) +  # Add space at left side of x-axis
+  xlab(NULL) + ylab(NULL) +
+        theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+
+
+  #relWidths=c(nrow(changeResults.ID.regional)+5,nrow(changeResults.ID.liquid)+7)
+  #figure2 <- ggarrange(p2,pliquid, ncol = 2, nrow = 1,widths = relWidths)
+  
+  
+  #########################
+  #########################
+  #####Version with separate axes for each type
+  #########################
+  #########################
+  
+  changeResults.ID.global<-changeResults.ID %>% filter(type %in% c("global")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.global)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("a.a1","a.z1")
+  changeResults.ID.global<-bind_rows(changeResults.ID.global,new_df)
+  
+  # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.global <- changeResults.ID.global %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.global$plotRegion)
+  changeResults.ID.global <- changeResults.ID.global %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pGlobal<-ggplot(changeResults.ID.global, aes(plotRegion, perAnnChange, color = type,label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(1)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    #geom_point() +  
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab("") + #ylab("Annualized Rate of Change (%)") +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 5,r=1)),
+         axis.text.x = element_blank(), # Make x-axis labels vertical and move inside
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+  
+  changeResults.ID.thick<-changeResults.ID %>% filter(type %in% c("Thick")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.thick)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("c.a1","c.z1")
+  changeResults.ID.thick<-bind_rows(changeResults.ID.thick,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.thick <- changeResults.ID.thick %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) #%>% arrange(typeAndRegion)
+  unique_order <- unique(sort(changeResults.ID.thick$typeAndRegion))
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(typeAndRegion = factor(typeAndRegion, levels = unique_order))
+  test <-changeResults.ID.thick %>% arrange(typeAndRegion)
+  unique_order <- unique(test$plotRegion)
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+   
+  pThick<-ggplot(changeResults.ID.thick, aes(plotRegion, perAnnChange, color = type, label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(3)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  changeResults.ID.vol<-changeResults.ID %>% filter(type %in% c("vol")) %>% filter(!grepl("_cm", typeAndRegion)) %>% filter(!bvar %in% c("WMH","totalBrainVolume", "totalLateralVentricle","lhCerebralWhiteMatterVol","rhCerebralWhiteMatterVol"))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.vol)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("b.a1","b.z1")
+  changeResults.ID.vol<-bind_rows(changeResults.ID.vol,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.vol <- changeResults.ID.vol %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.vol$plotRegion)
+  changeResults.ID.vol <- changeResults.ID.vol %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pVol<-ggplot(changeResults.ID.vol, aes(plotRegion, perAnnChange, color = type,label=shape )) +
+    theme_classic() + 
+    scale_color_manual(values = colors[c(4)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    #geom_point() +  
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 12,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  
+  relWidths=c(nrow(changeResults.ID.global)+6,nrow(changeResults.ID.vol),nrow(changeResults.ID.thick), nrow(changeResults.ID.liquid)+3)
+  figure3 <- ggarrange(pGlobal,pVol,pThick,pliquid, ncol = 4, nrow = 1,widths = relWidths)
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",name,".row1.Dashboard.png"),figure3,dpi = 500,width = 12, height = 5,units = "in",bg = "white")
+  
+
+}
+
+#########################################
+#########################################
+
+# Dashboard plots used in the paper.  
+
+#########################################
+#########################################
+
+  plotData.6sesh.only6sessions <- plotData.6sesh %>% filter(session %in% 1:6)
+
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = seq(3.1,3.6,.1), yAxisBreaks.right = seq(3.3,3.8,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.5,2.6,2.7,2.8))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(10.0,12.0,.5), yAxisBreaks.right = seq(9.0,11.0,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+  
+   ### CU 76 decliner
+  i="" 
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8)#,yAxisBreaks.left = seq(3.1,3.6,.1), yAxisBreaks.right = seq(3.3,3.8,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = seq(2.3,2.6,.1), yAxisBreaks.right = seq(2.3,2.6,.1))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#, yAxisBreaks.left = seq(10.0,12.0,.5), yAxisBreaks.right = seq(9.0,11.0,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+  row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = seq(3.7,4.2,.1), yAxisBreaks.right = seq(4.0,4.5,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(25,28.5,.5), yAxisBreaks.right = seq(18.5,22,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+
+ ### CU 74 maintainer
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(3.1,3.2,3.3,3.4,3.5), yAxisBreaks.right = c(3.3,3.4,3.5,3.6,3.7))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.6,2.7,2.8,2.9), yAxisBreaks.right = c(2.6,2.7,2.8,2.9))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(2.5,4.5,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#, yAxisBreaks.left = seq(25,28.5,.5), yAxisBreaks.right = seq(18.5,22,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+  
+   ### CU 71 M maintainer
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(3.6,3.7,3.8,3.9,4.0), yAxisBreaks.right = c(3.9,4.0,4.1,4.2,4.3))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.7,2.8,2.9,3.0), yAxisBreaks.right = c(2.6,2.7,2.8,2.9))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(3.0,5.0,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(8.5,10.5,.5), yAxisBreaks.right = seq(8.5,10.5,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(1060,1160,20))
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+   ### Check growth in high growth regions
+   check<-generate_plot_testRetest.dash(df = plotData,i, "lateralorbitofrontal","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.0,2.5,3.0), yAxisBreaks.right = c(2.0,2.5,3.0))
+   
+   check<-generate_plot_testRetest.dash(df = plotData,i, "rostralanteriorcingulate","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.5,3.0,3.5), yAxisBreaks.right = c(2.5,3.0,3.5))
+   
+  check<-generate_plot_testRetest.dash(df = plotData,i, "temporalpole","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(3.0,3.5,4.0), yAxisBreaks.right = c(3.0,3.5,4.0))
+      
+  check<-generate_plot_testRetest.dash(df = plotData,i, "frontalpole","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.0,2.5,3.0), yAxisBreaks.right = c(2.0,2.5,3.0))
+   
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+
+#### Supplemental Dashboards
+  
+##  - FTLD extreme Left atrophy
+  i=""
+
+blankPlot <- ggplot() + theme_void()
+a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(seq(0.4,0.9,.1)), yAxisBreaks.right = c(seq(2.5,3.0,.1)))
+a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(seq(2.0,2.3,.1)), yAxisBreaks.right = c(seq(2.2,2.5,.1)))
+#a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(3.0,9.0,1.5))
+a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 12, yAxisBreaks.left = seq(50,70,5), yAxisBreaks.right = seq(20,40,5))
+a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(960,1060,20))
+globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+ row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+
+  
+###  - FTLD typical atrophy
+
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(2.4,2.5,2.6,2.7,2.8,2.9), yAxisBreaks.right = c(3.0,3.1,3.2,3.3,3.4,3.5))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.4,2.5,2.6,2.7), yAxisBreaks.right = c(2.6,2.7,2.8,2.9))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(1.5,4.5,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(27.5,37.5,2.5), yAxisBreaks.right = seq(25,35,2.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(1000,1100,20))
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+   ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+   
+###  - Ozempic growth
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(3.2,3.3,3.4,3.5,3.6), yAxisBreaks.right = c(3.2,3.3,3.4,3.5,3.6))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.5,2.6,2.7,2.8))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(5.0,7.5,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(25,35,2.5), yAxisBreaks.right = seq(25,35,2.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(850,950,20))
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+   ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  
+  
+  
+```
+
+```{r Dasboards 2.0 - Resid change vs Change Score }
+###You are overloading memory so put variables here that you want to plot
+paperRegions<-read_csv("/path/to/data/Manuscripts/ClusterLong/Data/paperRegions.csv")
+
+paperRegions2<-c("Left-ADsignature_CT","Right-ADsignature_CT","Left-totalLateralVentricle","Right-totalLateralVentricle", "Left-totalBrainVolume","Right-totalBrainVolume", "WMH", "Left-MeanThickness", "Right-MeanThickness") # "Left-MeanGWCon","Right-MeanGWCon", "BrainSegVolNotVentSurf"
+
+paperRegions3<-c("WMH","Left-totalLateralVentricle","Right-totalLateralVentricle")
+
+###Data Wrangled in /path/to/data/Scripts/ClusterLong_wrangleData_240803.R
+allFSdataLong<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ClusterLong_240803_allFSdataLong.rds")) %>% filter(region %in% c(paperRegions$value,paperRegions2))
+
+##Read in UKB means data and format to combine with Ind change data
+UKBmeans.all<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ukbFSchangeMeans.dashboardIDs.rds")) 
+UKBmeans.all <- UKBmeans.all %>% mutate(region = gsub("lh_", "Left-", region)) %>% mutate(region = gsub("lh", "Left-", region)) %>%
+  mutate(region = gsub("rh_", "Right-", region)) %>% mutate(region = gsub("rh", "Right-", region)) %>% 
+  mutate(region = gsub("WM-hypointensities", "WMH", region)) %>% mutate(region = gsub("_thickness", "", region)) %>%
+  mutate(region = gsub("Cerebellum-Cortex", "CerebellumCortex", region))%>% mutate(region = gsub("entoRight-inal","entorhinal", region)) 
+
+
+#Fix Cerebellum naming
+allFSdataLong <- allFSdataLong %>%
+  mutate(region = ifelse(region == "Left-Cerebellum-Cortex", "Left-CerebellumCortex", region)) %>% mutate(region = ifelse(region == "Right-Cerebellum-Cortex", "Right-CerebellumCortex", region))
+
+### Add in global as a type
+allFSdataLong <- allFSdataLong %>%
+  mutate(origData = if_else(region %in% paperRegions2, "global", origData))
+allFSdataLong <- allFSdataLong %>%
+  mutate(origData = if_else(region %in% paperRegions3, "liquid", origData))
+
+##Remove GWR for now
+allFSdataLong <- allFSdataLong %>% filter(origData != "GWcon")
+
+##Make a variable with both brain region and type so that you can loop through all variables
+allFSdataLong <- allFSdataLong %>% mutate(type.region = str_c(origData,region, sep = "."))
+plotData <- allFSdataLong %>% filter(ID %in% SixSeshIDs) %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos") %>% filter(ID %in% SixSeshIDs) %>% filter(ID %in% allTestRetest.IDs) %>% filter(dx != "MCInos") %>% filter(session %in% c(1:6))
+
+
+###############
+###############
+###############
+##Chunk to make a participant dashboard
+
+###Grab Participant and template that you want
+name= "" #P19863 P19822 P10522 P10454 P10452 P10116(maintenance)
+dashboardIDs <- c("")
+
+for(name in c("")){ #
+  temp= "CSx6_inclusive"
+  plotData.ID <- plotData %>% filter(ID == name, template == temp)
+  
+  ###Need to shift yaxes based on each dashboard subj
+  plotVars<-tibble(ID = c(""),
+                   liquidMin = c(-3,-18,-3,-3,-3,-13,-3,-3),
+                   liquidMax = c(26,8,26,26,26,26,26,26),
+                   othersMin = c(-7.75,-2.5,-7.75,-12,-7.75,-7.75,-7.75,-7.75),
+                   othersMax = c(3.3,8.5,3.3,2.75,3.3,4,4,4),
+                   latVentMargin = c(3,3,12,12,0,3,3,2)
+                  )
+  
+  plotVars.name<-plotVars %>% filter(ID == name)
+  
+  ### Generate rate of change estimates for all brainVariables
+  
+  
+  allBrainVars<-unique(plotData$type.region)
+  
+  var=allBrainVars[16]
+  
+  tmp.changeResults.ID<-tibble()
+  for(var in allBrainVars){
+    varShort<- str_split(var, pattern = "\\.", simplify = TRUE)[2]
+    plotData.ID.var <- plotData.ID %>% filter(type.region == var)
+    lm.out<-organize_LM_simple(varShort,"CSx6_inclusive",plotData.ID.var,sessions = c(1,2,5,6))
+    lm.out$type.region <- var
+    lm.out$changeType<-"lm"
+    
+    change.out<-organize_changeScore_simple(varShort,"CSx6_inclusive",plotData.ID.var,sessions = c(1,2,5,6))
+    change.out$type.region <- var
+    change.out$changeType<-"change"
+    
+    lm.out <- lm.out %>% select(names(change.out))
+    tmp<- bind_rows(lm.out,change.out)
+    tmp.changeResults.ID<-bind_rows(tmp.changeResults.ID,tmp)
+    
+  }
+  
+  
+  changeResults.ID<-tmp.changeResults.ID
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = type.region) %>% separate(type.region,into = c("type","region"),sep = "\\.")
+  changeResults.ID<-changeResults.ID %>% separate(region, into = c("hemi","bvar"),sep = "-",fill = "left",remove = F)
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = paste(type,bvar,hemi,sep = "."))
+  ###Add Non hemi - both
+  changeResults.ID<-changeResults.ID %>% mutate(hemi = ifelse(is.na(hemi), "Both", hemi))
+  
+  #checkP-changeResults.ID %>% group_by(type,changeType) %>% summarise(meanPer = mean(perAnnChange),meanSlope = mean(slope), meanInt = mean(intercept))
+  
+  # Create a column for the Unicode symbols based on the Hemi column
+  # Define Unicode characters for half circles
+  left_half_circle <- "\u25D6"
+  right_half_circle <- "\u25D7"
+  circle <- "\u25CF"
+  changeResults.ID <- changeResults.ID %>% 
+    mutate(shape = case_when(
+    hemi == "Left"  ~ left_half_circle,
+    hemi == "Right" ~ right_half_circle,
+    hemi == "Both"  ~ circle, 
+    TRUE            ~ NA  # Optional: default case if more categories might exist
+  ))
+  
+  
+  ##Change typeAndRegion so that the x-axis is ordered how you want
+  changeResults.ID <- changeResults.ID %>% mutate(typeAndRegion = gsub("global\\.", "a.global.", typeAndRegion)) %>% 
+    mutate(typeAndRegion = gsub("vol\\.", "b.vol.", typeAndRegion)) %>%  mutate(typeAndRegion = gsub("Thick\\.", "c.Thick.", typeAndRegion)) %>%
+    mutate(typeAndRegion = gsub("liquid\\.", "d.liquid.", typeAndRegion))
+  
+  UKBmeans.ID <- UKBmeans.all %>% filter(ID == name) %>% select(ID,meanSPC,avgAge,region)
+  ### Add means to dataset
+  changeResults.ID <- left_join(changeResults.ID,UKBmeans.ID,by = c("region","ID"))
+  
+  ###### Make plot for individual dashboard
+  colors<-c("indianred2","skyblue2","seagreen3","goldenrod")
+
+
+  
+  changeResults.ID.liquid<-changeResults.ID %>% filter(type == "liquid")
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.liquid)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 40
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("d.a1", "d.z2")
+  changeResults.ID.liquid<-bind_rows(changeResults.ID.liquid,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.liquid <- changeResults.ID.liquid %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.liquid$plotRegion)
+  changeResults.ID.liquid <- changeResults.ID.liquid %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+
+pliquid<-ggplot(changeResults.ID.liquid, aes(plotRegion, perAnnChange, color = type,label = shape)) + 
+  theme_classic() + 
+  scale_color_manual(values = colors[2]) + 
+  #guides(color = FALSE) + 
+  geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+  geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+  #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+  #geom_point() +  
+  geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+  geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+  coord_cartesian(ylim = c(plotVars.name$liquidMin,plotVars.name$liquidMax),expand = F) +
+  scale_y_continuous(breaks = seq(-50,50,5))+
+  #scale_x_discrete(expand = c(0,0)) +  # Add space at left side of x-axis
+  xlab(NULL) + ylab(NULL) +
+        theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+
+
+  #relWidths=c(nrow(changeResults.ID.regional)+5,nrow(changeResults.ID.liquid)+7)
+  #figure2 <- ggarrange(p2,pliquid, ncol = 2, nrow = 1,widths = relWidths)
+  
+  
+  #########################
+  #########################
+  #####Version with separate axes for each type
+  #########################
+  #########################
+  
+  changeResults.ID.global<-changeResults.ID %>% filter(type %in% c("global")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.global)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("a.a1","a.z1")
+  changeResults.ID.global<-bind_rows(changeResults.ID.global,new_df)
+  
+  # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.global <- changeResults.ID.global %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.global$plotRegion)
+  changeResults.ID.global <- changeResults.ID.global %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pGlobal<-ggplot(changeResults.ID.global, aes(plotRegion, perAnnChange, color = type,label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(1)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    #geom_point() +  
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab("") + #ylab("Annualized Rate of Change (%)") +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 5,r=1)),
+         axis.text.x = element_blank(), # Make x-axis labels vertical and move inside
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+  
+  changeResults.ID.thick<-changeResults.ID %>% filter(type %in% c("Thick")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.thick)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("c.a1","c.z1")
+  changeResults.ID.thick<-bind_rows(changeResults.ID.thick,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.thick <- changeResults.ID.thick %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) #%>% arrange(typeAndRegion)
+  unique_order <- unique(sort(changeResults.ID.thick$typeAndRegion))
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(typeAndRegion = factor(typeAndRegion, levels = unique_order))
+  test <-changeResults.ID.thick %>% arrange(typeAndRegion)
+  unique_order <- unique(test$plotRegion)
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+   
+  pThick<-ggplot(changeResults.ID.thick, aes(plotRegion, perAnnChange, color = type, label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(3)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  changeResults.ID.vol<-changeResults.ID %>% filter(type %in% c("vol")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.vol)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("b.a1","b.z1")
+  changeResults.ID.vol<-bind_rows(changeResults.ID.vol,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.vol <- changeResults.ID.vol %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.vol$plotRegion)
+  changeResults.ID.vol <- changeResults.ID.vol %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pVol<-ggplot(changeResults.ID.vol, aes(plotRegion, perAnnChange, color = type,label=shape )) +
+    theme_classic() + 
+    scale_color_manual(values = colors[c(4)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_segment(aes(x = plotRegion, xend = plotRegion, y = perAnnChange, yend = meanSPC,alpha = .2), size = 1, linetype = "solid") +
+    #geom_errorbar(aes(ymin = per.conf.low, ymax = per.conf.high,alpha = .2),size = 1, linetype = "solid",width=0) +
+    #geom_point() +  
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = perAnnChange), size = 7, family = "Arial Unicode MS") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 12,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  
+  relWidths=c(nrow(changeResults.ID.global)+6,nrow(changeResults.ID.vol),nrow(changeResults.ID.thick), nrow(changeResults.ID.liquid)+3)
+  figure3 <- ggarrange(pGlobal,pVol,pThick,pliquid, ncol = 4, nrow = 1,widths = relWidths)
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.changeScoreComp.250205/",name,".changeScoreComp.Dashboard.png"),figure3,dpi = 500,width = 12, height = 5,units = "in",bg = "white")
+  
+
+}
+
+#########################################
+#########################################
+
+# Dashboard plots used in the paper.  
+
+#########################################
+#########################################
+
+  plotData.6sesh.only6sessions <- plotData.6sesh %>% filter(session %in% 1:6)
+  ### CU 78 maintainer
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = seq(3.1,3.6,.1), yAxisBreaks.right = seq(3.3,3.8,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.5,2.6,2.7,2.8))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(10.0,12.0,.5), yAxisBreaks.right = seq(9.0,11.0,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+  
+   ### CU 76 decliner
+  i="" 
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8)#,yAxisBreaks.left = seq(3.1,3.6,.1), yAxisBreaks.right = seq(3.3,3.8,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = seq(2.3,2.6,.1), yAxisBreaks.right = seq(2.3,2.6,.1))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#, yAxisBreaks.left = seq(10.0,12.0,.5), yAxisBreaks.right = seq(9.0,11.0,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+  row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+   ### CU 70 asymetric decliner
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = seq(3.7,4.2,.1), yAxisBreaks.right = seq(4.0,4.5,.1))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0 ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#,yAxisBreaks=seq(0.8,1.6,.2))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(25,28.5,.5), yAxisBreaks.right = seq(18.5,22,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+
+ ### CU 74 maintainer
+  i=""
+  
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(3.1,3.2,3.3,3.4,3.5), yAxisBreaks.right = c(3.3,3.4,3.5,3.6,3.7))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.6,2.7,2.8,2.9), yAxisBreaks.right = c(2.6,2.7,2.8,2.9))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(2.5,4.5,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)#, yAxisBreaks.left = seq(25,28.5,.5), yAxisBreaks.right = seq(18.5,22,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0)
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  
+  
+   ### CU 71 M maintainer
+  i=""
+
+  blankPlot <- ggplot() + theme_void()
+  a1<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,id = i, brainVar = "Hippocampus_cm",type = "vol",templateName = "CSx6_inclusive",title = "",yaxisMargin = 8,yAxisBreaks.left = c(3.6,3.7,3.8,3.9,4.0), yAxisBreaks.right = c(3.9,4.0,4.1,4.2,4.3))
+  a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "ADsignature_CT","Thick","CSx6_inclusive","",yaxisMargin = 0,yAxisBreaks.left = c(2.7,2.8,2.9,3.0), yAxisBreaks.right = c(2.6,2.7,2.8,2.9))
+  #a2<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "parahippocampal","Thick","CSx6_inclusive","",yaxisMargin = 0)# ,yAxisBreaks.left = c(2.5,2.6,2.7,2.8), yAxisBreaks.right = c(2.4,2.5,2.6,2.7))
+  a7<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "WMH_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(3.0,5.0,.5))
+  a9<-generate_plot_testRetest.dash(df = plotData.6sesh.only6sessions,i, "totalLateralVentricle_cm","vol","CSx6_inclusive", "",yaxisMargin = 0, yAxisBreaks.left = seq(8.5,10.5,.5), yAxisBreaks.right = seq(8.5,10.5,.5))
+  a11<-generate_plot_global(df = plotData.6sesh.only6sessions,i, "BrainSegVolNotVentSurf_cm","vol","CSx6_inclusive", "",yaxisMargin = 0,yAxisBreaks=seq(1060,1160,20))
+  globalFig1 <- ggarrange(a7, blankPlot,a11 ,ncol = 3, nrow = 1, widths = c(1,.1, 1))
+  row2<- ggarrange(a1, blankPlot,a2 ,ncol = 3, nrow = 1, widths = c(1,.05, 1))
+  row3<- ggarrange(a9, blankPlot, a7, blankPlot,a11, ncol = 5, nrow = 1, widths = c(2,.1,.95,.1, 1.03))
+   row23<-ggarrange(row2,row3,ncol = 1,nrow = 2)
+
+    ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row23.Dashboard.png"),row23,dpi = 500,width = 12, height = 6.8,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row2.Dashboard.png"),row2,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/",i,".row3.Dashboard.png"),row3,dpi = 500,width = 12, height = 3.4,units = "in",bg = "white")
+
+```
+
+
+```{r Supplemental Reference for Figures 6-8 }
+name= ""
+dashboardIDs <- c("")
+
+UKBmeans.fullAvg<-read_rds(paste0(altPath,"Manuscripts/ClusterLong/Data/ukbFSchangeMeans.all.rds"))
+
+UKBmeans.fullAvg <- UKBmeans.fullAvg %>% mutate(region = gsub("lh_","Left-",region)) %>% mutate(region = gsub("rh_","Right-",region)) %>% 
+  mutate(region = gsub("_thickness","",region)) %>% mutate(region = gsub("WM-hypointensities","WMH",region)) %>% 
+  mutate(region = gsub("-","",region)) %>% 
+  mutate(region = gsub("Left","Left-",region)) %>% mutate(region = gsub("Right","Right-",region)) %>% 
+  mutate(region = gsub("Thalamus","Thalamus-",region))
+
+
+UKBmeans.fullAvg <- UKBmeans.fullAvg %>% filter(region %in% changeResults.ID$region)
+
+  temp= "CSx6_inclusive"
+  plotData.ID <- plotData %>% filter(ID == name, template == temp)
+  
+  ###Need to shift yaxes based on each dashboard subj
+  plotVars<-tibble(ID = c(""),
+                   liquidMin = c(-3,-18,-3,-3,-3),
+                   liquidMax = c(26,8,26,26,26),
+                   othersMin = c(-7.75,-2.5,-7.75,-12,-7.75),
+                   othersMax = c(3.3,8.5,3.3,2.75,3.3),
+                   latVentMargin = c(3,3,12,12,0)
+                  )
+  
+  plotVars.name<-plotVars %>% filter(ID == name)
+  
+  ### Generate rate of change estimates for all brainVariables
+  
+  
+  allBrainVars<-unique(plotData$type.region)
+  
+  var=allBrainVars[16]
+  
+  tmp.changeResults.ID<-tibble()
+  for(var in allBrainVars){
+    varShort<- str_split(var, pattern = "\\.", simplify = TRUE)[2]
+    plotData.ID.var <- plotData.ID %>% filter(type.region == var)
+    lm.out<-organize_LM_simple(varShort,"CSx6_inclusive",plotData.ID.var,sessions = c(1:6))
+    lm.out$type.region <- var
+    tmp.changeResults.ID<-bind_rows(tmp.changeResults.ID,lm.out)
+  }
+  
+  changeResults.ID<-tmp.changeResults.ID
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = type.region) %>% separate(type.region,into = c("type","region"),sep = "\\.")
+  changeResults.ID<-changeResults.ID %>% separate(region, into = c("hemi","bvar"),sep = "-",fill = "left",remove = F)
+  changeResults.ID<-changeResults.ID %>% mutate(typeAndRegion = paste(type,bvar,hemi,sep = "."))
+  ###Add Non hemi - both
+  changeResults.ID<-changeResults.ID %>% mutate(hemi = ifelse(is.na(hemi), "Both", hemi))
+  
+  # Create a column for the Unicode symbols based on the Hemi column
+  # Define Unicode characters for half circles
+  left_half_circle <- "\u25D6"
+  right_half_circle <- "\u25D7"
+  circle <- "\u25CF"
+  changeResults.ID <- changeResults.ID %>% 
+    mutate(shape = case_when(
+    hemi == "Left"  ~ left_half_circle,
+    hemi == "Right" ~ right_half_circle,
+    hemi == "Both"  ~ circle, 
+    TRUE            ~ NA  # Optional: default case if more categories might exist
+  ))
+  
+  
+  ##Change typeAndRegion so that the x-axis is ordered how you want
+  changeResults.ID <- changeResults.ID %>% mutate(typeAndRegion = gsub("global\\.", "a.global.", typeAndRegion)) %>% 
+    mutate(typeAndRegion = gsub("vol\\.", "b.vol.", typeAndRegion)) %>%  mutate(typeAndRegion = gsub("Thick\\.", "c.Thick.", typeAndRegion)) %>%
+    mutate(typeAndRegion = gsub("liquid\\.", "d.liquid.", typeAndRegion))
+  
+  #UKBmeans.ID <- UKBmeans.all %>% filter(ID == name) %>% select(ID,meanSPC,avgAge,region)
+  ### Add means to dataset
+  changeResults.ID <- left_join(changeResults.ID,UKBmeans.fullAvg,by = c("region"))
+  
+  ###### Make plot for individual dashboard
+  colors<-c("indianred2","skyblue2","seagreen3","goldenrod")
+
+
+  
+  changeResults.ID.liquid<-changeResults.ID %>% filter(type == "liquid")
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.liquid)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 40
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("d.a1", "d.z2")
+  changeResults.ID.liquid<-bind_rows(changeResults.ID.liquid,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.liquid <- changeResults.ID.liquid %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.liquid$plotRegion)
+  changeResults.ID.liquid <- changeResults.ID.liquid %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+
+pliquid<-ggplot(changeResults.ID.liquid, aes(plotRegion, perAnnChange, color = type,label = shape)) + 
+  theme_classic() + 
+  scale_color_manual(values = colors[2]) + 
+  geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+  geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+  geom_text(aes(y = meanSPC + 1, label = region), vjust = 0.5, hjust = 0, angle = 90,size = 3, family = "Arial Unicode MS", color = "black") +  # Adding 
+  coord_cartesian(ylim = c(plotVars.name$liquidMin,plotVars.name$liquidMax),expand = F) +
+  scale_y_continuous(breaks = seq(-50,50,5))+
+  xlab(NULL) + ylab(NULL) +
+        theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(), 
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+
+
+  #relWidths=c(nrow(changeResults.ID.regional)+5,nrow(changeResults.ID.liquid)+7)
+  #figure2 <- ggarrange(p2,pliquid, ncol = 2, nrow = 1,widths = relWidths)
+  
+  
+  #########################
+  #########################
+  #####Version with separate axes for each type
+  #########################
+  #########################
+  
+  changeResults.ID.global<-changeResults.ID %>% filter(type %in% c("global")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.global)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("a.a1","a.z1")
+  changeResults.ID.global<-bind_rows(changeResults.ID.global,new_df)
+  
+  # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.global <- changeResults.ID.global %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.global$plotRegion)
+  changeResults.ID.global <- changeResults.ID.global %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pGlobal<-ggplot(changeResults.ID.global, aes(plotRegion, perAnnChange, color = type,label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(1)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = meanSPC - 0.5, label = region), vjust = 0.5, hjust = 1, angle = 90,size = 3, family = "Arial Unicode MS", color = "black") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    xlab(NULL) + ylab("") + #ylab("Annualized Rate of Change (%)") +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_text(color="black",size=14, margin = margin(b = 0,l = 5,r=1)),
+         axis.text.x = element_blank(),  # Make x-axis labels vertical and move inside
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+
+  
+  changeResults.ID.thick<-changeResults.ID %>% filter(type %in% c("Thick")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.thick)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("c.a1","c.z1")
+  changeResults.ID.thick<-bind_rows(changeResults.ID.thick,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.thick <- changeResults.ID.thick %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) #%>% arrange(typeAndRegion)
+  unique_order <- unique(sort(changeResults.ID.thick$typeAndRegion))
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(typeAndRegion = factor(typeAndRegion, levels = unique_order))
+  test <-changeResults.ID.thick %>% arrange(typeAndRegion)
+  unique_order <- unique(test$plotRegion)
+  changeResults.ID.thick <- changeResults.ID.thick %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+   
+  pThick<-ggplot(changeResults.ID.thick, aes(plotRegion, perAnnChange, color = type, label = shape)) + theme_classic() + 
+    scale_color_manual(values = colors[c(3)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = meanSPC - 0.5, label = region), vjust = 0.5, hjust = 1, angle = 90,size = 3, family = "Arial Unicode MS", color = "black") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 1,r=1)),
+          axis.text.x = element_blank(),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  changeResults.ID.vol<-changeResults.ID %>% filter(type %in% c("vol")) %>% filter(!grepl("_cm", typeAndRegion))
+  
+  # Add rows to make gaps between variable types
+  col_names<-colnames(changeResults.ID.vol)
+  # Initialize a data frame with NA values
+  n_rows = 2
+  new_df <- data.frame(matrix(data = NA, nrow = n_rows, ncol = length(col_names)))
+  colnames(new_df) <- col_names
+  # Fill the 'perAnnChange' column with 20
+  new_df$perAnnChange <- 20
+  # Set 'typeAndRegion' to "a.z" for the first two rows and "b.z" for the last two rows
+  new_df$typeAndRegion <- c("b.a1","b.z1")
+  changeResults.ID.vol<-bind_rows(changeResults.ID.vol,new_df)
+  
+    # Make sure 'region' has factors levels derived from the order in 'typeAndRegion'
+  changeResults.ID.vol <- changeResults.ID.vol %>%
+    mutate(plotRegion = if_else(is.na(region), typeAndRegion, region)) %>%
+    arrange(typeAndRegion)
+  unique_order <- unique(changeResults.ID.vol$plotRegion)
+  changeResults.ID.vol <- changeResults.ID.vol %>% mutate(plotRegion = factor(plotRegion, levels = unique_order))
+  
+  pVol<-ggplot(changeResults.ID.vol, aes(plotRegion, perAnnChange, color = type,label=shape )) +
+    theme_classic() + 
+    scale_color_manual(values = colors[c(4)]) + 
+    #guides(color = FALSE) + 
+    geom_hline(yintercept = 0, color = "darkgray", size = 1, linetype = "solid") +
+    geom_point(aes(y = meanSPC), color = "black", shape = 15, size = 2) +  # Adding meanSPC points
+    geom_text(aes(y = meanSPC - 0.5, label = region), vjust = 0.5, hjust = 1, angle = 90,size = 3, family = "Arial Unicode MS", color = "black") +
+    coord_cartesian(ylim = c(plotVars.name$othersMin,plotVars.name$othersMax),expand = F) +
+    scale_y_continuous(breaks = c(-20:10))+
+    #scale_x_discrete(expand = expansion(mult = c(1, 1))) +  # Add space at left side of x-axis
+    xlab(NULL) + ylab(NULL) +
+      theme(text = element_text(family = "Helvetica"),
+          axis.line = element_line(size = 1),
+          axis.ticks.y = element_line(colour = "black", size = 1),
+          axis.ticks.x = element_blank(), 
+          axis.text.y =  element_blank(), #element_text(color="black",size=14, margin = margin(b = 0,l = 12,r=1)),
+          axis.text.x = element_blank(),
+          axis.title.x = element_text(size=16), # Remove the x-axis title
+          axis.title.y = element_text(size=16),
+          legend.text = element_text(size=14),
+          #plot.margin = margin(0.15,0.1,0.1,0.1, "in"),
+          plot.margin = margin(0.1,0.05,0.1,0.05, "in"),
+          legend.position = "none",  # Remove the legend
+          legend.justification=c(0,1),
+          legend.background = element_rect(fill = "transparent"), # Make legend background transparent
+          legend.key = element_rect(fill = "transparent", color = "transparent"),
+          legend.text.align = 0, plot.title=element_text(size=16,hjust=0.5,margin=margin(b=10)))
+  
+  relWidths=c(nrow(changeResults.ID.global)+6,nrow(changeResults.ID.vol),nrow(changeResults.ID.thick), nrow(changeResults.ID.liquid)+3)
+  figure3 <- ggarrange(pGlobal,pVol,pThick,pliquid, ncol = 4, nrow = 1,widths = relWidths)
+  ggsave(paste0(altPath,"/Manuscripts/ClusterLong/Visualizations/Plots/Dashboards.241030/BrainLabels.Dashboard.png"),figure3,dpi = 500,width = 12, height = 5,units = "in",bg = "white")
+  
+  
+  
+```
+

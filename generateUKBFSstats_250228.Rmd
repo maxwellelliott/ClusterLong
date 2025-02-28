@@ -1,0 +1,114 @@
+---
+title: "ClusterLong_UKBChangeMeans_241024"
+output: html_document
+date: "2024-10-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Organize Data}
+library(tidyverse)
+
+##Grab pheno data that you may need
+ukb_phenoAssocData <- read_rds("/path/to/data/ukb_pacni_phenoAssocData_240419.rds")
+ukb_phenoAssocData<-ukb_phenoAssocData %>% mutate(ageAtScan1 = as.numeric((f.53.2.0 - birthday)/365.25))
+ukb_phenoAssocData<-ukb_phenoAssocData %>% mutate(ageAtScan2 = as.numeric((f.53.3.0 - birthday)/365.25)) %>% mutate(yearsBetwScans = ageAtScan2 - ageAtScan1)
+ukb_ageData<-ukb_phenoAssocData %>% select(eid,sex.x,ageAtScan1,ageAtScan2,yearsBetwScans)
+
+##Grab FS Long data
+allFSdataLong<-read_csv("/path/to/data/allFSdataLong_FSv6.0_240430.csv")
+##Grab AD sig
+ADsigLong<-read_csv("/path/to/data/ADsignatureMask_meanCT_241031.csv")
+ADsigLong$brainVar<-"ADsignature_CT"
+ADsigLong <- ADsigLong %>% mutate(region = paste(hemi,brainVar, sep="-")) %>% mutate(region = gsub("lh-", "Left-", region)) %>% mutate(region = gsub("rh-", "Right-", region)) %>%  
+  separate(fullID, 
+           into = c("first", "second", "visit"), 
+           sep = "_",
+           remove = TRUE,    # original column is replaced by the new columns
+           extra = "drop",   # drop any extra fields past the fourth
+           fill = "right") %>%
+  select(eid,visit,templateID,region,value) %>% mutate(visit = as.numeric(visit))
+
+allFSdataLong <- bind_rows(allFSdataLong,ADsigLong)
+
+##Grab list of long people who meet inclusion criteria and don't have double E4 or dementia - From /ncf/sba08/Triarchy_OA/Max/UKBanalyses/ClusterLong/scripts/ClusterLong_UKBfigures_240914.Rmd
+longCleanEIDs<-read_rds("/path/to/data/UKB_longCleanedEIDs_241025.rds")
+
+## Keep only clean ID data
+allFSdataLong <- allFSdataLong %>% filter(eid %in% longCleanEIDs)
+
+### Add in summary variables
+allFSdataLong.wide<-allFSdataLong %>% filter(region != "BrainSegVolNotVent") %>% pivot_wider(names_from = region,values_from = value) %>% drop_na()
+
+###ADD in combined ventricle variables for each Hemisphere
+allFSdataLong.wide <- allFSdataLong.wide %>% rowwise() %>%  # Apply the following operations row by row
+  mutate(allVentricles = sum(`Left-Inf-Lat-Vent`,`Left-Lateral-Ventricle`,`Right-Inf-Lat-Vent`,`Right-Lateral-Ventricle`,`3rd-Ventricle`,`4th-Ventricle`,`5th-Ventricle`, na.rm = TRUE)) %>% ungroup()
+allFSdataLong.wide <- allFSdataLong.wide %>% rowwise() %>%  # Apply the following operations row by row
+  mutate(`Left-totalLateralVentricle` = sum(`Left-Inf-Lat-Vent`,`Left-Lateral-Ventricle`, na.rm = TRUE), `Right-totalLateralVentricle` = sum(`Right-Inf-Lat-Vent`,`Right-Lateral-Ventricle`, na.rm = TRUE)) %>% ungroup()
+
+##Add in left and right total brain volume measures for later plotting
+allFSdataLong.wide <- allFSdataLong.wide %>% rowwise() %>%
+  mutate(`Left-totalBrainVolume` = sum(`lhCortexVol`, `lhCerebralWhiteMatterVol`, `Left-Accumbens-area`, `Left-Amygdala`, `Left-Caudate`, 
+                          `Left-Hippocampus`, `Left-Pallidum`, `Left-Putamen`, `Left-Thalamus-Proper`, `Left-VentralDC`, 
+                          `Left-Cerebellum-Cortex`, `Left-Cerebellum-White-Matter`, na.rm = TRUE),
+         `Right-totalBrainVolume` = sum(`rhCortexVol`, `rhCerebralWhiteMatterVol`, `Right-Accumbens-area`, `Right-Amygdala`, `Right-Caudate`, 
+                           `Right-Hippocampus`, `Right-Pallidum`, `Right-Putamen`, `Right-Thalamus-Proper`, `Right-VentralDC`, 
+                           `Right-Cerebellum-Cortex`, `Right-Cerebellum-White-Matter`, na.rm = TRUE)) %>% ungroup()
+
+
+
+##Make long Change variables of interest 
+allFSdataLong.longer <- allFSdataLong.wide %>% pivot_longer(cols = c(4:146), names_to = "region",values_to = "value")
+#Set up with visits as columns
+allFSdataLong.longChange <- allFSdataLong.longer %>% select(-templateID) %>% pivot_wider(names_from = visit,values_from = value,names_prefix = "Visit.")
+allFSdataLong.longChange <- left_join(allFSdataLong.longChange,ukb_ageData,by = "eid")
+
+allFSdataLong.longChange <- allFSdataLong.longChange %>% drop_na() %>% mutate(meanAge =  (ageAtScan2 +ageAtScan1)/2, meanMorph = (Visit.3 + Visit.2)/2) %>% mutate(rawChange = (Visit.3 - Visit.2)/yearsBetwScans, spcChange = (Visit.3 - Visit.2)/meanMorph/yearsBetwScans*100)
+
+ukbFSchangeMeans.all <-allFSdataLong.longChange %>% group_by(region) %>% summarise(meanSPC = mean(spcChange), meanRawChange = mean(rawChange),meanAge = mean(meanAge), sampSize = n(),meanMorph = mean(meanMorph))
+
+ukbFSchangeMeans.mean76 <-allFSdataLong.longChange %>% filter(meanAge > 72.5 & meanAge < 80) %>% group_by(region) %>% summarise(meanSPC = mean(spcChange), meanRawChange = mean(rawChange),avgAge = mean(meanAge),maxAge = max(meanAge),minAge = min(meanAge), sampSize = n(),meanMorph = mean(meanMorph))
+
+##Get IDs of 300 ind from UKB closest in age to dasboard participants
+##Age from middle of imaging to match UKB age calculation
+###Edited to remove IDs
+dashboardIDs <- tibble(ID = c(""),
+                       Age = c()
+                       )
+###Edited to remove IDs
+id=""
+ukbAgeMatch.ChangeMeans<-tibble()
+for(id in dashboardIDs$ID){
+  tmp.ukbAgeMatch <- tibble()
+  info <- dashboardIDs %>% filter(ID == id)
+  age <- info$Age
+  ukbAgeMatch.dashboards<-allFSdataLong.longChange %>%
+  # Calculate the absolute difference from age 76
+  mutate(ageDifference = abs(meanAge - age)) %>% select(eid,meanAge,ageDifference) %>% 
+  unique() %>% arrange(ageDifference) %>% slice_head(n = 300) 
+
+tmp.ukbAgeMatch <- allFSdataLong.longChange %>%
+  filter(eid %in% ukbAgeMatch.dashboards$eid) %>%
+  group_by(region) %>%
+  # Summarise the data
+  summarise(
+    meanSPC = mean(spcChange),
+    meanRawChange = mean(rawChange),
+    avgAge = mean(meanAge),
+    sampSize = n(),
+    ageMin = min(meanAge),
+    ageMax = max(meanAge),
+    meanMorph = mean(meanMorph)
+  )
+  tmp.ukbAgeMatch$ID<-id
+  tmp.ukbAgeMatch$IDage<-age
+  ukbAgeMatch.ChangeMeans<-bind_rows(ukbAgeMatch.ChangeMeans,tmp.ukbAgeMatch)
+}
+
+write_rds(ukbAgeMatch.ChangeMeans,"/path/to/data/ukbFSchangeMeans.dashboardIDs.rds")
+#write_rds(ukbFSchangeMeans.,"/path/to/data/ukbFSchangeMeans.matched.rds")
+
+```
+

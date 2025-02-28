@@ -1,0 +1,831 @@
+---
+title: "ClusterLong_UKBfigures"
+output: html_document
+date: "2024-09-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(ggdist)
+library(cowplot)
+library(dplyr)
+library(svglite)
+
+
+#Grab curated cross-sectional data
+ukb_phenoAssocData <- read_rds("/path/to/data/ukb_pacni_phenoAssocData_240419.rds")
+
+##Grab AD sig
+ADsigCross<-read_csv("/path/to/datalongFS/data/ADsignatureMask_meanCT_cross_250128.csv")
+ADsigCross$brainVar<-"ADsignature_CT"
+ADsigCross <- ADsigCross %>% mutate(region = paste(hemi,brainVar, sep="-")) %>% mutate(region = gsub("lh-", "Left-", region)) %>% mutate(region = gsub("rh-", "Right-", region)) %>%
+  select(eid,ID,region,value)
+ADsigCross <- ADsigCross %>% group_by(eid,ID) %>% summarise(meanADsig_CT = mean(value))
+#ADsigCross$region <- "meanADsig_CT"
+
+ukb_phenoAssocData <- left_join(ukb_phenoAssocData,ADsigCross)
+
+### QC and inclusions
+coreDataset <-ukb_phenoAssocData
+###Lots of missing BMI - use baseline if imaging timepoint is missing
+coreDataset <- coreDataset %>% mutate(BMIcomb =  coalesce(BMI, f.21001.0.0))
+
+##Rename variables for convenience
+coreDataset <- coreDataset %>% rename(WBV = `f.26516.2.0`, eTIV = `f.26521.2.0`, Age = ageAtScan, Sex = `f.31.0.0`,WMHyper = `f.25781.2.0` ,genetic_sex = `f.22001.0.0`, genetic_sex_aneuloidy = `f.22019.0.0`,inv_SNR = `f.25734.2.0`, inv_CNR = `f.25735.2.0`, headPos_x = `f.25756.2.0`, headPos_y = `f.25757.2.0`, headPos_z = `f.25758.2.0`, headPos_table = `f.25759.2.0`, SA_right = `f.26721.2.0`, SA_left = `f.26822.2.0`,WMH = `f.26528.2.0`)
+
+coreDataset <- coreDataset %>% mutate(meanCT = (`f.26755.2.0` + `f.26856.2.0`)/2)
+coreDataset <- coreDataset %>% mutate(totalHippocampus = `f.26562.2.0` + `f.26593.2.0`,brainVolume = `f.26515.2.0`,totalLateralVentricle = `f.26554.2.0` + `f.26585.2.0`,TotalSA = SA_right + SA_left)
+
+
+###Participant withdrawal
+withdrawalIDs<-read_csv("/path/to/data/withdrawal_UKB_2023-04-25.csv",col_names = F)
+e3Dose<-read_csv("/path/to/data/Genetic_Harvard_UKBB_apoe4.csv")
+e3Dose<-rename(e3Dose, e3Dose = APOE4_rs429358_T)
+
+coreDataset <- left_join(coreDataset,e3Dose)
+
+coreDataset <- coreDataset %>% mutate(e4Dose = 2 - e3Dose)
+
+coreDataset <- coreDataset %>% drop_na(eid,WBV) #43050 have WBV
+coreDataset <- coreDataset %>% drop_na(Age) #43050 have Age
+coreDataset <- coreDataset %>% drop_na(Sex) #43050 have genetic sex
+coreDataset <- coreDataset %>% drop_na(eTIV) #43050 
+
+coreDataset <- coreDataset %>% filter(BMIcomb < 40) # 42602
+
+coreDataset <- coreDataset %>% filter(is.na(inv_SNR) | scale(inv_SNR) < 3) # 42087
+coreDataset <- coreDataset %>% filter(is.na(inv_CNR) | scale(inv_CNR) < 3) # 41860
+coreDataset <- coreDataset %>% filter(is.na(headPos_x) | abs(scale(headPos_x)) < 4) # 41800
+coreDataset <- coreDataset %>% filter(is.na(headPos_y) | abs(scale(headPos_y)) < 4) # 41786
+coreDataset <- coreDataset %>% filter(is.na(headPos_z) | abs(scale(headPos_z)) < 4) # 41727
+coreDataset <- coreDataset %>% filter(is.na(headPos_table) | abs(scale(headPos_table)) < 4) # 41659
+coreDataset <- coreDataset %>% filter(abs(scale(eTIV)) < 4) # 41646
+coreDataset <- coreDataset %>% filter(abs(scale(meanCT)) < 4) # 41619
+coreDataset <- coreDataset %>% filter(abs(scale(TotalSA)) < 4) # 41616
+
+coreDataset <- coreDataset %>% filter(abs(scale(f.26537.2.0)) < 3) # 41411 mask vol to eTIV or eTIV minus Mask in Jingnan's paper
+
+coreDataset <- coreDataset %>% filter(!eid %in% withdrawalIDs$X1) ##None of the requested withdrawals are in this subset
+
+
+##Make ageBin variable for plotting
+plotData.cross <- coreDataset %>%  mutate(
+    ageBin = case_when(
+      Age < 50 ~ "44-49",
+      Age >= 50 & Age < 55 ~ "50-54",
+      Age >= 55 & Age < 60 ~ "55-59",
+      Age >= 60 & Age < 65 ~ "60-64",
+      Age >= 65 & Age < 70 ~ "65-69",
+      Age >= 70 & Age < 75 ~ "70-74",
+      Age >= 75 ~ "75-80"
+    )
+  )
+
+###Filter out double e4 carriers and all dementia cases
+
+dementiaCases <- coreDataset %>% filter(!is.na(ageAtDEM)) %>% pull(eid)
+doubleE4cases <- coreDataset %>% filter(e3Dose == 0) %>% pull(eid)
+whiteCases <-  coreDataset %>% filter(f.21000.0.0.x %in% c("Any other white background","British","Irish","White")) %>% pull(eid) ### 21000 is race, white is 1001
+
+plotData.cross.noDem <- plotData.cross %>% filter(!eid %in% c(dementiaCases))
+plotData.cross.WhitenoDem <- plotData.cross %>% filter(!eid %in% c(dementiaCases)) %>% filter(eid %in% whiteCases)
+plotData.cross.noE4noDem <- plotData.cross %>% drop_na(e4Dose) %>% filter(!eid %in% c(dementiaCases,doubleE4cases))
+
+
+##Grab FS Long data
+ukb_phenoAssocData <- read_rds("/path/to/data/ukb_pacni_phenoAssocData_240419.rds")
+ukb_phenoAssocData<-ukb_phenoAssocData %>% mutate(ageAtScan1 = as.numeric((f.53.2.0 - birthday)/365.25))
+ukb_phenoAssocData<-ukb_phenoAssocData %>% mutate(ageAtScan2 = as.numeric((f.53.3.0 - birthday)/365.25))
+
+allFSdataLong<-read_csv("/path/to/data/allFSdataLong_FSv6.0_240430.csv")
+
+##Grab AD sig
+ADsigLong<-read_csv("/path/to/datalongFS/data/ADsignatureMask_meanCT_241031.csv")
+ADsigLong$brainVar<-"ADsignature_CT"
+ADsigLong <- ADsigLong %>% mutate(region = paste(hemi,brainVar, sep="-")) %>% mutate(region = gsub("lh-", "Left-", region)) %>% mutate(region = gsub("rh-", "Right-", region)) %>%  
+  separate(fullID, 
+           into = c("first", "second", "visit"), 
+           sep = "_",
+           remove = TRUE,    # original column is replaced by the new columns
+           extra = "drop",   # drop any extra fields past the fourth
+           fill = "right") %>%
+  select(eid,visit,templateID,region,value) %>% mutate(visit = as.numeric(visit))
+
+meanADsigLong <- ADsigLong %>% group_by(eid,visit,templateID) %>% summarise(value = mean(value))
+meanADsigLong$region <- "meanADsig_CT"
+
+allFSdataLong <- bind_rows(allFSdataLong,meanADsigLong)
+
+longAssocVars <- c("MeanHippocampus","MeanThickness","meanADsig_CT","AllVentricles","BrainSegVolNotVent","WM-hypointensities") #totalHipp, meanCT, totalLateralVentricles, brainVolume, WMH
+
+i=longAssocVars[1]
+i="AllVentricles"
+
+test<-allFSdataLong %>% filter(region %in% longAssocVars)
+
+plotData.long <- test %>% unique() %>% select(!templateID) %>% pivot_wider(names_from = c(visit,region),values_from = value,names_prefix = "Visit") %>% left_join(y = ukb_phenoAssocData)  
+  
+##Make the change variables. Modeled after - https://surfer.nmr.mgh.harvard.edu/fswiki/LongitudinalTwoStageModel
+plotData.long <- plotData.long %>% mutate(yearsBetwScans = ageAtScan2 - ageAtScan1, meanAge =  (ageAtScan2 +ageAtScan1)/2, mean_long_MeanHippocampus = (Visit3_MeanHippocampus + Visit2_MeanHippocampus)/2, mean_long_MeanADsigThickness = (Visit3_meanADsig_CT + Visit2_meanADsig_CT)/2, mean_long_MeanThickness = (Visit3_MeanThickness + Visit2_MeanThickness)/2, mean_long_AllVentricles = (Visit3_AllVentricles + Visit2_AllVentricles)/2, mean_long_BrainSegVolNotVent = (Visit3_BrainSegVolNotVent + Visit2_BrainSegVolNotVent)/2, `mean_long_WMH` = (`Visit3_WM-hypointensities` + `Visit2_WM-hypointensities`)/2) %>% 
+  mutate(rate_long_MeanHippocampus = (Visit3_MeanHippocampus - Visit2_MeanHippocampus)/yearsBetwScans,rate_long_MeanADsigThickness = (Visit3_meanADsig_CT - Visit3_meanADsig_CT)/yearsBetwScans,rate_long_MeanThickness = (Visit3_MeanThickness - Visit2_MeanThickness)/yearsBetwScans,rate_long_AllVentricles = (Visit3_AllVentricles - Visit2_AllVentricles)/yearsBetwScans,rate_long_BrainSegVolNotVent = (Visit3_BrainSegVolNotVent - Visit2_BrainSegVolNotVent)/yearsBetwScans,rate_long_WMH = (`Visit3_WM-hypointensities` - `Visit2_WM-hypointensities`)/yearsBetwScans) %>%
+  mutate(spc_long_MeanHippocampus = 100*rate_long_MeanHippocampus/mean_long_MeanHippocampus,spc_long_MeanADsig = 100*rate_long_MeanADsigThickness/mean_long_MeanADsigThickness,spc_long_MeanThickness = 100*rate_long_MeanThickness/mean_long_MeanThickness, spc_long_AllVentricles = 100*rate_long_AllVentricles/mean_long_AllVentricles, spc_long_BrainSegVolNotVent = 100*rate_long_BrainSegVolNotVent/mean_long_BrainSegVolNotVent, spc_long_WMH = 100*rate_long_WMH/mean_long_WMH)
+
+plotData.long <- plotData.long %>% mutate(BMIcomb =  coalesce(BMI, f.21001.0.0))
+
+##Rename variables for convenience
+plotData.long <- plotData.long %>% rename(WBV = `f.26516.2.0`, eTIV = `f.26521.2.0`, Age = ageAtScan, Sex = `f.31.0.0`,WMHyper = `f.25781.2.0` ,genetic_sex = `f.22001.0.0`, genetic_sex_aneuloidy = `f.22019.0.0`,inv_SNR = `f.25734.2.0`, inv_CNR = `f.25735.2.0`, headPos_x = `f.25756.2.0`, headPos_y = `f.25757.2.0`, headPos_z = `f.25758.2.0`, headPos_table = `f.25759.2.0`, SA_right = `f.26721.2.0`, SA_left = `f.26822.2.0`,WMH = `f.26528.2.0`)
+
+plotData.long <- plotData.long %>% mutate(meanCT = (`f.26755.2.0` + `f.26856.2.0`)/2)
+plotData.long <- plotData.long %>% mutate(totalHippocampus = `f.26562.2.0` + `f.26593.2.0`,brainVolume = `f.26515.2.0`,totalLateralVentricle = `f.26554.2.0` + `f.26585.2.0`,TotalSA = SA_right + SA_left)
+
+
+plotData.long <- plotData.long %>% drop_na(eid,WBV) #4628 have WBV
+plotData.long <- plotData.long %>% drop_na(Age) #4628 have Age
+plotData.long <- plotData.long %>% drop_na(Sex) #4628 have genetic sex
+plotData.long <- plotData.long %>% drop_na(eTIV) #4628 
+
+plotData.long <- plotData.long %>% filter(BMIcomb < 40) # 4586
+
+plotData.long <- plotData.long %>% filter(is.na(inv_SNR) | scale(inv_SNR) < 3) # 4532
+plotData.long <- plotData.long %>% filter(is.na(inv_CNR) | scale(inv_CNR) < 3) # 4510
+plotData.long <- plotData.long %>% filter(is.na(headPos_x) | abs(scale(headPos_x)) < 4) # 4505
+plotData.long <- plotData.long %>% filter(is.na(headPos_y) | abs(scale(headPos_y)) < 4) # 4505
+plotData.long <- plotData.long %>% filter(is.na(headPos_z) | abs(scale(headPos_z)) < 4) # 4499
+plotData.long <- plotData.long %>% filter(is.na(headPos_table) | abs(scale(headPos_table)) < 4) # 4478
+plotData.long <- plotData.long %>% filter(abs(scale(eTIV)) < 4) # 4475
+plotData.long <- plotData.long %>% filter(abs(scale(meanCT)) < 4) # 4473
+plotData.long <- plotData.long %>% filter(abs(scale(TotalSA)) < 4) # 4473
+
+plotData.long <- plotData.long %>% filter(abs(scale(f.26537.2.0)) < 3) # 4452 mask vol to eTIV or eTIV minus Mask in Jingnan's paper
+
+##Make ageBin variable for plotting
+plotData.long<-plotData.long %>%  mutate(
+    ageBin = case_when(
+      meanAge < 55 ~ "48-54",
+      meanAge >= 55 & meanAge < 60 ~ "55-59",
+      meanAge >= 60 & meanAge < 65 ~ "60-64",
+      meanAge >= 65 & meanAge < 70 ~ "65-69",
+      meanAge >= 70 & meanAge < 75 ~ "70-74",
+      meanAge >= 75 ~ "75-81"),
+    ageBin.cross = case_when(
+      Age < 50 ~ "44-49",
+      Age >= 50 & Age < 55 ~ "50-54",
+      Age >= 55 & Age < 60 ~ "55-59",
+      Age >= 60 & Age < 65 ~ "60-64",
+      Age >= 65 & Age < 70 ~ "65-69",
+      Age >= 70 & Age < 75 ~ "70-74",
+      Age >= 75 ~ "75-80")
+  )
+
+
+
+
+plotData.long <- plotData.long %>% pivot_longer(cols = starts_with("spc_long_"),
+               names_to = "var", 
+               values_to = "spc_long") %>% mutate(var = str_remove(var, "spc_long_"))
+
+plotData.long <-plotData.long %>% drop_na(c(spc_long))
+
+plotdata.long.IDs <- unique(plotData.long$eid)
+
+###Filter out e4 and dementia
+plotData.long.noDem <- plotData.long %>% filter(!eid %in% c(dementiaCases)) #4449
+length(unique(plotData.long.noDem$eid)) 
+plotData.long.noE4noDem <- plotData.long %>% filter(eid %in% plotData.cross.noE4noDem$eid) # 4243
+length(unique(plotData.long.noE4noDem$eid))
+plotData.long.whiteNoDem <- plotData.long %>% filter(eid %in% plotData.cross.WhitenoDem$eid) # 4308
+length(unique(plotData.long.whiteNoDem$eid))
+
+
+### Check for significant age*sex interaction
+
+
+plotData.long.noDem.Hipp <- plotData.long.noDem %>% filter(var == "MeanHippocampus")
+plotData.long.noDem.Hipp <- left_join(plotData.long.noDem.Hipp,e3Dose)
+plotData.long.noDem.Hipp <- plotData.long.noDem.Hipp %>% mutate(e4Dose = 2 - e3Dose) %>%drop_na(e4Dose)
+
+
+plotData.long.noE4noDem.oldestBin <- plotData.long.noE4noDem %>% filter(ageBin.cross == "75-80")
+
+plotData.long.noE4noDem.Hipp <- plotData.long.noE4noDem %>% filter(var == "MeanHippocampus")
+plotData.long.noE4noDem.oldestBin <- plotData.long.noE4noDem.Hipp %>% filter(ageBin.cross == "75-80")
+summary(lm(spc_long ~ Age*Sex,data = plotData.long.noE4noDem.Hipp))
+summary(lm(spc_long ~ Sex,data = plotData.long.noE4noDem.oldestBin))
+
+summary(lm(totalHippocampus ~ Age*Sex,data = plotData.cross.noE4noDem))
+
+### Table stats
+table(plotData.cross.noE4noDem$Sex,plotData.cross.noE4noDem$ageBin)
+table(plotData.long.noE4noDem.Hipp$Sex,plotData.long.noE4noDem.Hipp$ageBin.cross)
+
+table(plotData.cross$e4Dose,plotData.cross$ageBin)
+table(plotData.cross$ageBin)
+table(plotData.long.noDem.Hipp$e4Dose,plotData.long.noDem.Hipp$ageBin.cross)
+table(plotData.long.noDem.Hipp$ageBin.cross)
+
+### save Data for other analyses
+#write_rds(plotData.cross.noE4noDem$eid,"/path/to/dataClusterLong/data/UKB_longCleanedEIDs_241025.rds")
+#write_rds(plotData.long.noE4noDem,"/path/to/dataClusterLong/data/UKB_MRIandPhenoData_long_cleaned_241025.rds")
+
+#write_csv(as_tibble(plotdata.long.IDs),"/path/to/dataClusterLong/data/UKB_longIDs_250124.csv")
+
+```
+
+```{r Make figures, echo=FALSE}
+
+# Ensure your plotData dataframe is prepared as before
+
+cols<-c("#d74343","#4685bf")
+
+#### Create the cross sectional raincloud plot
+
+plotData.cross.noE4noDem <- plotData.cross.noE4noDem %>% mutate(totalHippocampus_cm3 = totalHippocampus/1000,totalLateralVentricle_cm3 = totalLateralVentricle/1000,
+                                                                brainVolume_cm3 = brainVolume/1000,WMH_cm3 = WMH/1000)
+# Calculate mean hippocampal volume for each sex and age bin combination
+
+plotTable<-tibble(cross.var = c("totalHippocampus","meanADsig_CT","totalLateralVentricle_cm3","brainVolume_cm3","WMH_cm3"),
+       long.var = c(longAssocVars[c(1,3:5)],"WMH"),
+       cross.ylow = c(5000,2.25,0,850,0),
+       cross.yhigh= c(11000,3.5,100,1600,10),
+       cross.ybreak=c(1000,.25,20,100,2),
+       long.ylow = c(-4,-2.5,-5,-2,-8),
+       long.yhigh= c(2,1.5,10,1,18),
+       long.ybreak=c(1,1,1,1,2),
+       cross.ylabel=c("Bilateral Hippocampal Vol (mm^3)","Mean AD Signature Thick (mm)","Lateral Ventricle Vol (cm^3)","Total Brain Vol (cm^3)","WMH Vol (cm^3)"),
+       long.ylabel=c("Bilateral Hippocampal Atrophy (%)","Cortical Thining (%)","Ventricle Change (%)","Total Brain Atrophy (%)","WMH Change (%)")
+       )
+
+for(num in 1:nrow(plotTable)){
+
+  
+  cross.var<-plotTable$cross.var[num]
+  long.var<-plotTable$long.var[num]
+  cross.ylow<-plotTable$cross.ylow[num]
+  cross.yhigh<-plotTable$cross.yhigh[num]
+  cross.ybreak<-plotTable$cross.ybreak[num]
+  cross.ylabel<-plotTable$cross.ylabel[num]
+  long.ylabel<-plotTable$long.ylabel[num]
+  long.ylow<-plotTable$long.ylow[num]
+  long.yhigh<-plotTable$long.yhigh[num]
+  long.ybreak<-plotTable$long.ybreak[num]
+  
+  # Adjust the regex to properly handle escaping backslashes
+  matches <- str_match(cross.ylabel, "(.*)\\((.*)\\^(\\d+)\\)(.*)")
+  
+  # Check if the match was successful
+  if (!is.na(matches[1, 1])) {
+    prefix <- matches[2]
+    unit <- matches[3]
+    superscript <- matches[4]
+    suffix <- matches[5]
+  
+    # Create the y-axis label expression
+    y_label_expr <- bquote(.(prefix)~"(" * .(unit)^.(superscript) * .(suffix) * ")")
+  } else {
+    # If the regular expression does not find a match, use the original label
+    y_label_expr <- cross.ylabel
+  }
+  
+  mean_data <- plotData.cross.noE4noDem %>%
+    group_by(ageBin, sex.y) %>%
+    summarize(mean_volume = mean(.data[[cross.var]], na.rm = TRUE), n=n(), .groups = 'drop')
+  
+  # Create the raincloud plot
+raincloud_plot.cross <- ggplot(plotData.cross.noE4noDem, aes(x = ageBin, y = .data[[cross.var]], fill = sex.y, color = sex.y)) +
+    ggdist::stat_halfeye(
+      width = 1.0, 
+      .width = 0, 
+      alpha = 0.7,
+      side = "left",
+      point_colour = NA
+    ) +
+    geom_line(
+      data = mean_data, 
+      aes(x = ageBin, y = mean_volume, color = sex.y, group = sex.y), 
+      size = 1, 
+      show.legend = FALSE 
+    ) +
+    geom_point(
+      data = mean_data, 
+      aes(x = ageBin, y = mean_volume, fill = sex.y, group = sex.y), 
+      size = 2, 
+      shape = 21,  # Use a shape with an outline
+      color = "black",  # Set the outline color
+      show.legend = FALSE 
+    ) +
+    theme_cowplot() +
+    labs(
+      x = "Age Range (years)",
+      y = y_label_expr
+    ) +
+    scale_fill_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+    scale_color_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+    scale_y_continuous(
+      limits = c(cross.ylow, cross.yhigh),  # Set exact y-axis limits
+      breaks = seq(from = cross.ylow, to = cross.yhigh, by = cross.ybreak),  # Set y-axis breaks every 1000
+      expand=c(0,0)
+    ) +
+    #coord_cartesian(ylim = c(cross.ylow, cross.yhigh)) +
+    theme(
+      text = element_text(size = 16, color = "black", family = "Helvetica"),  # Specify font family
+      axis.title = element_text(size = 18, color = "black", family = "Helvetica"),  # Specify font family
+      axis.text = element_text(size = 16, color = "black", family = "Helvetica"),  # Specify font family
+      axis.line = element_line(size = 1.0, color = "black"),  # Axis lines size
+      axis.ticks = element_line(size = 1.0, color = "black"),  # Axis ticks size
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      axis.ticks.length = unit(0.2, "cm"),  # Axis ticks length
+      legend.title = element_blank(),
+      legend.position = "none",
+      #legend.position = c(0.02, 0.02),  # Legend position
+      legend.justification = c(0, 0),  # Legend justification
+      #legend.background = element_rect(color = "black"), 
+      legend.box.background = element_blank(),  # Legend box background
+      legend.text = element_text(color = "black", family = "Helvetica")  # Specify font family
+    ) +
+    guides(
+      fill = guide_legend(override.aes = list(alpha = 0.7, color = NA, fill = cols)),  # Override legend fill aesthetics
+      color = "none"  # Remove color guide
+    )
+  
+  raincloud_plot.cross
+  
+  
+  ggsave(paste0("/path/to/dataClusterLong/plots/UKB_",cross.var,"_CrossSectional_rainCloud_241010.png"), 
+         raincloud_plot.cross, bg = "white", 
+         width = 6, height = 5, units = 'in', dpi = 500)
+  
+  
+  plotData.long.var<-plotData.long.noE4noDem %>% filter(var == long.var)
+    
+  mean_data <- plotData.long.var %>%
+    group_by(ageBin.cross, sex.y) %>%
+    summarize(mean_spc = mean(spc_long, na.rm = TRUE), n=n(), meanYearsBtwnScan = mean(yearsBetwScans), .groups = 'drop')
+  
+  # Create the raincloud plot
+  raincloud_plot.long <- ggplot(plotData.long.var, aes(x = ageBin.cross, y = spc_long, fill = sex.y)) +
+    geom_hline(yintercept = 0, color = "black", size = 1,linetype = "dashed") +
+    ggdist::stat_halfeye(
+      width = 1.2, 
+      .width = 0, 
+      alpha = 0.7,
+      side = "left",
+      point_colour = NA
+      ) +
+    geom_line(
+      data = mean_data, 
+      aes(x = ageBin.cross, y = mean_spc, color = sex.y, group = sex.y), 
+      size = 1,show.legend = FALSE 
+    ) +
+     geom_point(
+      data = mean_data, 
+      aes(x = ageBin.cross, y = mean_spc, fill = sex.y, group = sex.y), 
+      size = 2, 
+      shape = 21,  # Use a shape with an outline
+      color = "black",  # Set the outline color
+      show.legend = FALSE 
+    ) +
+    theme_cowplot() +
+    labs(
+      x = "Age Range (years)",
+      y = long.ylabel
+    ) +
+     scale_fill_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+    scale_color_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+      scale_y_continuous(
+      limits = c(long.ylow,long.yhigh),  # Set exact y-axis limits
+      breaks = seq(from = long.ylow, to = long.yhigh, by = long.ybreak),  # Set y-axis breaks every 1000
+      expand=c(0,0)
+    ) +
+    #coord_cartesian(ylim = c(long.ylow,long.yhigh)) +
+    #coord_cartesian(ylim = c(-7,17)) +
+    theme(
+      text = element_text(size = 16, color = "black", family = "Helvetica"),  # Specify font family
+      axis.title = element_text(size = 18, color = "black", family = "Helvetica"),  # Specify font family
+      axis.text = element_text(size = 16, color = "black", family = "Helvetica"),  # Specify font family
+      axis.line = element_line(size = 1.0, color = "black"),  # Axis lines size
+      axis.ticks = element_line(size = 1.0, color = "black"),  # Axis ticks size
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      axis.ticks.length = unit(0.2, "cm"),  # Axis ticks length
+      legend.title = element_blank(),
+      legend.position = "none",
+      #legend.position = c(0.02, 0.02),  # Legend position
+      legend.justification = c(0, 0),  # Legend justification
+      legend.background = element_blank(),  # Legend background
+      legend.box.background = element_blank(),  # Legend box background
+      legend.text = element_text(color = "black", family = "Helvetica")  # Specify font family
+    ) +
+    guides(
+      fill = guide_legend(override.aes = list(alpha = 0.7, color = NA, fill = cols)),  # Override legend fill aesthetics
+      color = "none"  # Remove color guide
+    )
+  
+  raincloud_plot.long
+  
+  
+  ggsave(paste0("/path/to/dataClusterLong/plots/UKB_",long.var,"_ChangeRate_rainCloud_241010.png"), 
+         raincloud_plot.long, bg = "white", 
+         width = 6, height = 5, units = 'in', dpi = 500)
+  
+  
+  combFigure <- ggarrange(raincloud_plot.cross,raincloud_plot.long,ncol = 2, nrow = 1)
+  
+  ggsave(paste0("/path/to/dataClusterLong/plots/UKB_",cross.var,"_CrossAndLong_rainCloud_241010.png"), 
+         combFigure, bg = "white", 
+         width = 12, height = 5, units = 'in', dpi = 500)
+  
+}
+
+
+
+
+
+
+
+
+  #####################
+  ############### Raw change plot 
+  
+  
+  mean_data <- plotData.long.clean %>%
+    group_by(ageBin, sex.y) %>%
+    summarize(mean_rate = mean(rate_long, na.rm = TRUE), .groups = 'drop')
+  
+  # Create the raincloud plot
+  raincloud_plot.long <- ggplot(plotData.long.clean, aes(x = ageBin, y = rate_long, fill = sex.y)) +
+    geom_hline(yintercept = 0, color = "slategray", size = 3, alpha = 0.3) +
+    ggdist::stat_halfeye(
+      width = 1.2, 
+      .width = 0, 
+      alpha = 0.7,
+      side = "left",
+      point_colour = NA
+      ) +
+    geom_line(
+      data = mean_data, 
+      aes(x = ageBin, y = mean_rate, color = sex.y, group = sex.y), 
+      size = 1,show.legend = FALSE 
+    ) +
+     geom_point(
+      data = mean_data, 
+      aes(x = ageBin, y = mean_rate, fill = sex.y, group = sex.y), 
+      size = 2, 
+      shape = 21,  # Use a shape with an outline
+      color = "black",  # Set the outline color
+      show.legend = FALSE 
+    ) +
+    theme_cowplot() +
+    labs(
+      x = "Age Range (years)",
+      y = "Hipp. Atrophy (mm3)"
+    ) +
+     scale_fill_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+    scale_color_manual(
+      values = cols, 
+      labels = c("XX", "XY")  # Custom labels
+    ) +
+    coord_cartesian(ylim = c(-120,100)) +
+    theme(
+      legend.title = element_blank(),
+      legend.position = c(0.02, 0.02),  # Position legend inside plot at bottom left corner
+      legend.justification = c(0, 0),    # Adjust justification
+      legend.background = element_blank(), # Remove legend background
+      legend.box.background = element_blank() # Remove legend box background
+    ) +
+    guides(
+      fill = guide_legend(override.aes = list(alpha = 0.7, color = NA, fill = cols)),  # Override legend fill aesthetics
+      color = "none"  # Remove color guide
+    )
+  
+  raincloud_plot.long
+  
+  ggsave("/path/to/dataClusterLong/plots/UKB_HippChangeRate_Raw_rainCloud_240909.png", 
+         raincloud_plot.long, bg = "white", 
+         width = 6, height = 5, units = 'in', dpi = 500)
+  
+
+
+
+############### e4 dose hippocampal cross figure
+plotData.cross.noDem <- plotData.cross %>% filter(! eid %in% dementiaCases)
+summarized_data <- plotData.cross.noDem %>%
+  group_by(ageBin, e4Dose) %>%
+  summarize(totalHippocampal_volume = mean(totalHippocampus, na.rm = TRUE),
+            sd_hippocampal_volume = sd(totalHippocampus, na.rm = TRUE),
+            n = n()) %>%
+  ungroup() %>% filter(!ageBin %in% c("46-49","75-80"))
+
+summarized_data <- summarized_data %>%
+  mutate(e4Dose = as.factor(e4Dose)) %>%
+         mutate(e4Dose = fct_recode(e4Dose,
+                             "Zero" = "0",
+                             "One" = "1",
+                             "Two" = "2")) 
+
+
+cols<-c("#75B7D1FF","#59A77FFF","#CE9642FF")
+
+e4.boxplot<-ggplot(summarized_data, aes(x = ageBin, y = totalHippocampal_volume, fill = e4Dose)) +
+  geom_bar(stat = "identity", position = position_dodge(), color = "black") +
+  geom_errorbar(aes(ymin = totalHippocampal_volume - sd_hippocampal_volume / sqrt(n), 
+                    ymax = totalHippocampal_volume + sd_hippocampal_volume / sqrt(n)), 
+                position = position_dodge(0.9), width = 0.25) +
+  coord_cartesian(ylim=c(6500,8600)) +
+  labs(
+    x = "Age Bin",
+    y = "Total Hippocampal Volume (mm3)",
+    fill = "e4 Copies"  # Set legend title
+  ) +
+  theme_cowplot() +
+  theme(
+    legend.position = c(0.98, 0.98),  # Position legend inside plot at top right corner
+    legend.justification = c(1, 1),   # Justify legend to the top right corner
+    legend.direction = "vertical",    # Arrange legend items vertically
+    legend.box.just = "left",         # Align legend box to the left (for title)
+    legend.title = element_text(face = "bold"),  # Make legend title bold
+    legend.text = element_text(size = 10)  # Adjust text size if necessary
+  ) +  
+  scale_fill_manual(
+    values = cols, 
+  ) +
+  guides(fill = guide_legend(title.position = "top", title.hjust = 0.5))  # Center the legend title
+
+e4.boxplot
+ggsave("/path/to/dataClusterLong/plots/UKB_e4HippVol_boxplot_240909.png", 
+       e4.boxplot, bg = "white", 
+       width = 6, height = 6, units = 'in', dpi = 500)
+
+
+############### e4 dose hippocampal long figure
+
+plotData.long.gt60 <- plotData.long %>% filter(meanAge > 60, var == "MeanHippocampus") 
+
+plotData.long.gt60 <- left_join(plotData.long.gt60,e3Dose)
+
+plotData.long.gt60 <- plotData.long.gt60 %>% mutate(e4Dose = 2 - e3Dose) %>%drop_na(e4Dose)
+table(plotData.long.gt60$e4Dose)
+
+plotData.long.gt60 <- plotData.long.gt60 %>% mutate(spc_long.AgeSexResid = resid(lm(spc_long ~ meanAge + sex.y)))
+
+##Grab mean so that you can add it back to the residualized values
+hippSPCmean<-mean(plotData.long.gt60$spc_long)
+
+summary(lm(spc_long ~ meanAge + sex.y,data = plotData.long.gt60))
+
+summarized_data <- plotData.long.gt60 %>%
+  group_by(e4Dose) %>%
+  summarize(Hipp.spc = mean(spc_long.AgeSexResid, na.rm = TRUE) + hippSPCmean,
+            sd.Hipp.spc = sd(spc_long.AgeSexResid, na.rm = TRUE),
+            n = n()) %>% ungroup()
+
+summarized_data <- summarized_data %>%
+  mutate(e4Dose = as.factor(e4Dose)) %>%
+         mutate(e4Dose = fct_recode(e4Dose,
+                             "Zero" = "0",
+                             "One" = "1",
+                             "Two" = "2")) 
+
+cols<-c("#75B7D1FF","#59A77FFF","#CE9642FF")
+
+e4.boxplot<-ggplot(summarized_data, aes(x = e4Dose, y = Hipp.spc, fill = e4Dose)) +
+  geom_bar(stat = "identity", position = position_dodge(), color = "black") +
+  geom_errorbar(aes(ymin = Hipp.spc - sd.Hipp.spc / sqrt(n), 
+                    ymax = Hipp.spc + sd.Hipp.spc / sqrt(n)), 
+                position = position_dodge(0.9), width = 0.25) +
+  coord_cartesian(ylim=c(-2,0.5)) +
+  geom_hline(yintercept = 0) +
+  labs(
+    x = "e4 Dose",
+    y = "Rate of Hippocamal Atrophy (mm3)",
+    fill = "e4 Copies"  # Set legend title
+  ) +
+  theme_cowplot() +
+  theme(
+    legend.position = "none"  # Remove the legend
+  ) +
+  scale_fill_manual(
+    values = cols, 
+  ) +
+  ggtitle(" Atrophy Rate in Age 60+ by E4 Dose")+
+  guides(fill = guide_legend(title.position = "top", title.hjust = 0.5))  # Center the legend title
+
+e4.boxplot
+ggsave("/path/to/dataClusterLong/plots/UKB_e4HippVol_long_boxplot_240918.png", 
+       e4.boxplot, bg = "white", 
+       width = 6, height = 6, units = 'in', dpi = 500)
+
+######
+
+# etiv f.26521.2.0
+
+# Fit the linear model
+model <- lm(totalHippocampus ~ f.26521.2.0, data = plotData.long.clean)
+
+# Extract residuals and add them as a new variable in the dataframe
+plotData.long.clean <- plotData.long.clean %>%
+  mutate(eTIVresidHipp = resid(model))
+
+
+plotData.long.clean<- plotData.long.clean %>% mutate(totalHippocampus = `f.26562.2.0` + `f.26593.2.0`) %>% mutate(etivAdjHipp = totalHippocampus/f.26521.2.0*100)
+
+cor.test(plotData.long.clean$spc_long,plotData.long.clean$pacni)
+summary(lm(scale(spc_long) ~ scale(pacni) + sex.x + scale(age.x),data = plotData.long.clean))
+summary(lm(scale(spc_long) ~ scale(totalHippocampus) + sex.x + scale(age.x),data = plotData.long.clean))
+
+cor.test(plotData.long.clean$etivAdjHipp,plotData.long.clean$pacni)
+cor.test(plotData.long.clean$eTIVresidHipp,plotData.long.clean$pacni)
+summary(lm(scale(etivAdjHipp) ~ scale(pacni) + sex.x + scale(age.x),data = plotData.long.clean))
+summary(lm(scale(eTIVresidHipp) ~ scale(pacni) + sex.x + scale(age.x),data = plotData.long.clean))
+summary(lm(scale(etivAdjHipp) ~ scale(totalHippocampus) + sex.x + scale(age.x),data = plotData.long.clean))
+summary(lm(scale(totalHippocampus) ~ scale(pacni) + sex.x + scale(age.x),data = plotData.long.clean))
+
+cor.test(plotData.long.clean$etivAdjHipp,plotData.long.clean$spc_long)
+summary(lm(scale(etivAdjHipp) ~ scale(spc_long) + sex.x + scale(age.x),data = plotData.long.clean))
+
+
+#####plot
+
+# Linear regression between eTIVadjHipp and spc_long
+reg_model <- lm(scale(spc_long) ~ scale(etivAdjHipp), data = plotData.long.clean)
+
+# Extract the effect size (slope)
+effect_size <- coef(reg_model)[2]
+effect_size_label <- paste0("r = ", round(effect_size, 2))
+
+# Create the scatter plot
+scatter_plot <- ggplot(plotData.long.clean, aes(x = etivAdjHipp, y = spc_long)) +
+  geom_point() +  # Add points
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +  # Add linear regression line
+  labs(
+    x = "eTIV-adjusted Hippocampal Volume",
+    y = "SPC Long",
+  ) +
+  theme_classic() +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.5, label = effect_size_label, size = 5, color = "black")
+
+# Print the plot
+print(scatter_plot)
+
+ggsave("/path/to/dataClusterLong/plots/UKB_HippBaselineChange_scatter_240909.png", 
+       scatter_plot, bg = "white", 
+       width = 6, height = 6, units = 'in', dpi = 500)
+
+
+
+```
+
+
+
+
+
+
+
+```{r Rain cloud plots for other brain vars}
+
+### WMH (26506), Brain volume (26516), mean cortical thickness (meanCT)
+
+###Make SPC variable for each brain variable
+
+
+
+mean_data <- plotData.cross.clean %>%
+  group_by(ageBin, sex.y) %>%
+  summarize(mean_volume = mean(meanCT, na.rm = TRUE), .groups = 'drop')
+
+# Create the raincloud plot
+raincloud_plot.cross <- ggplot(plotData.cross.clean, aes(x = ageBin, y = meanCT, fill = sex.y,color = sex.y)) +
+  ggdist::stat_halfeye(
+    width = 1.0, 
+    .width = 0, 
+    alpha = 0.7,
+    side = "left",
+    point_colour = NA
+    ) +
+  geom_line(
+    data = mean_data, 
+    aes(x = ageBin, y = mean_volume, color = sex.y, group = sex.y), 
+    size = 1,show.legend = FALSE 
+  ) +
+   geom_point(
+    data = mean_data, 
+    aes(x = ageBin, y = mean_volume, fill = sex.y, group = sex.y), 
+    size = 2, 
+    shape = 21,  # Use a shape with an outline
+    color = "black",  # Set the outline color
+    show.legend = FALSE 
+  ) +
+  theme_cowplot() +
+  labs(
+    x = "Age Range (years)",
+    y = "Hipp. Volume (cm3)"
+  ) +
+   scale_fill_manual(
+    values = cols, 
+    labels = c("XX", "XY")  # Custom labels
+  ) +
+  scale_color_manual(
+    values = cols, 
+    labels = c("XX", "XY")  # Custom labels
+  ) +
+  #coord_cartesian(ylim = c(5.5,10.8)) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = c(0.02, 0.02),  # Position legend inside plot at bottom left corner
+    legend.justification = c(0, 0),    # Adjust justification
+    legend.background = element_blank(), # Remove legend background
+    legend.box.background = element_blank() # Remove legend box background
+  ) +
+  guides(
+    fill = guide_legend(override.aes = list(alpha = 0.7, color = NA, fill = cols)),  # Override legend fill aesthetics
+    color = "none"  # Remove color guide
+  )
+
+raincloud_plot.cross
+
+
+ggsave("/path/to/dataClusterLong/plots/UKB_MeanCTCrossSectional_rainCloud_240912.png", 
+       raincloud_plot.cross, bg = "white", 
+       width = 6, height = 4, units = 'in', dpi = 500)
+
+mean_data <- plotData.long.clean %>%
+  group_by(ageBin, sex.y) %>%
+  summarize(mean_spc = mean(f.26755.2.0, na.rm = TRUE), .groups = 'drop')
+
+# Create the raincloud plot
+raincloud_plot.long <- ggplot(plotData.long.clean, aes(x = ageBin, y = spc_long, fill = sex.y)) +
+  geom_hline(yintercept = 0, color = "slategray", size = 3, alpha = 0.3) +
+  ggdist::stat_halfeye(
+    width = 1.2, 
+    .width = 0, 
+    alpha = 0.7,
+    side = "left",
+    point_colour = NA
+    ) +
+  geom_line(
+    data = mean_data, 
+    aes(x = ageBin, y = mean_spc, color = sex.y, group = sex.y), 
+    size = 1,show.legend = FALSE 
+  ) +
+   geom_point(
+    data = mean_data, 
+    aes(x = ageBin, y = mean_spc, fill = sex.y, group = sex.y), 
+    size = 2, 
+    shape = 21,  # Use a shape with an outline
+    color = "black",  # Set the outline color
+    show.legend = FALSE 
+  ) +
+  theme_cowplot() +
+  labs(
+    x = "Age Range (years)",
+    y = "Hipp. Atrophy (%)"
+  ) +
+   scale_fill_manual(
+    values = cols, 
+    labels = c("XX", "XY")  # Custom labels
+  ) +
+  scale_color_manual(
+    values = cols, 
+    labels = c("XX", "XY")  # Custom labels
+  ) +
+  coord_cartesian(ylim = c(-3.5,1.5)) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = c(0.02, 0.02),  # Position legend inside plot at bottom left corner
+    legend.justification = c(0, 0),    # Adjust justification
+    legend.background = element_blank(), # Remove legend background
+    legend.box.background = element_blank() # Remove legend box background
+  ) +
+  guides(
+    fill = guide_legend(override.aes = list(alpha = 0.7, color = NA, fill = cols)),  # Override legend fill aesthetics
+    color = "none"  # Remove color guide
+  )
+
+raincloud_plot.long
+
+
+ggsave("/path/to/dataClusterLong/plots/UKB_HippChangeRate_rainCloud_240909.png", 
+       raincloud_plot.long, bg = "white", 
+       width = 6, height = 4, units = 'in', dpi = 500)
+
+
+```
+
+
+
